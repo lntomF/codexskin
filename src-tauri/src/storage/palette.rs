@@ -216,6 +216,13 @@ fn contrast_from_pixels(pixels: &RgbaImage) -> Result<ThemeContrast, CommandErro
     Ok(ThemeContrast {
         sidebar: contrast_region(pixels, RegionBounds::new(0.00, 0.00, 0.16, 1.00))?,
         content: contrast_region(pixels, RegionBounds::new(0.16, 0.00, 0.82, 0.18))?,
+        // The Codex application-menu/title strip is the full-width topmost band
+        // (about 39 px in the current renderer). It must not inherit the content
+        // sample because header pixels can have a different hue and luminance.
+        header: Some(contrast_region(
+            pixels,
+            RegionBounds::new(0.00, 0.00, 1.00, 0.09),
+        )?),
         info_panel: contrast_region(pixels, RegionBounds::new(0.82, 0.08, 1.00, 0.50))?,
         composer: contrast_region(pixels, RegionBounds::new(0.36, 0.80, 0.78, 1.00))?,
     })
@@ -581,6 +588,129 @@ mod tests {
             .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
             .unwrap();
         bytes
+    }
+
+    fn png_bytes_from_image(image: RgbaImage) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        DynamicImage::ImageRgba8(image)
+            .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
+            .unwrap();
+        bytes
+    }
+
+    fn wallpaper_with_header(header: [u8; 3], body: [u8; 3]) -> Vec<u8> {
+        let mut image = RgbaImage::from_pixel(160, 90, Rgba([body[0], body[1], body[2], 255]));
+        for (_, y, pixel) in image.enumerate_pixels_mut() {
+            if y < 9 {
+                *pixel = Rgba([header[0], header[1], header[2], 255]);
+            }
+        }
+        png_bytes_from_image(image)
+    }
+
+    fn header_foreground(theme: &crate::models::Theme) -> [u8; 3] {
+        let value = serde_json::to_value(theme).expect("theme serialization");
+        parse_css_color(
+            value["contrast"]["header"]["foreground"]
+                .as_str()
+                .expect("header foreground must serialize"),
+        )
+    }
+
+    fn header_foreground_css(theme: &crate::models::Theme) -> String {
+        let value = serde_json::to_value(theme).expect("theme serialization");
+        value["contrast"]["header"]["foreground"]
+            .as_str()
+            .expect("header foreground must serialize")
+            .to_owned()
+    }
+
+    #[test]
+    fn header_foregrounds_follow_light_header_hue_without_fixed_global_foreground() {
+        let warm_header = [246, 226, 201];
+        let cool_header = [202, 226, 247];
+        let warm = generate_wallpaper_theme(
+            "file:///display.jpg".into(),
+            "file:///source.png".into(),
+            "Warm header".into(),
+            &wallpaper_with_header(warm_header, [12, 28, 46]),
+        )
+        .unwrap();
+        let cool = generate_wallpaper_theme(
+            "file:///display.jpg".into(),
+            "file:///source.png".into(),
+            "Cool header".into(),
+            &wallpaper_with_header(cool_header, [12, 28, 46]),
+        )
+        .unwrap();
+
+        assert_ne!(header_foreground_css(&warm), "#172033");
+        assert_ne!(header_foreground_css(&cool), "#172033");
+        assert_ne!(header_foreground_css(&warm), header_foreground_css(&cool));
+        assert!(contrast_ratio(header_foreground(&warm), warm_header) >= 4.5);
+        assert!(contrast_ratio(header_foreground(&cool), cool_header) >= 4.5);
+    }
+
+    #[test]
+    fn header_foregrounds_follow_dark_header_hue_without_fixed_global_foreground() {
+        let wine_header = [50, 20, 34];
+        let teal_header = [8, 39, 48];
+        let wine = generate_wallpaper_theme(
+            "file:///display.jpg".into(),
+            "file:///source.png".into(),
+            "Wine header".into(),
+            &wallpaper_with_header(wine_header, [232, 230, 222]),
+        )
+        .unwrap();
+        let teal = generate_wallpaper_theme(
+            "file:///display.jpg".into(),
+            "file:///source.png".into(),
+            "Teal header".into(),
+            &wallpaper_with_header(teal_header, [232, 230, 222]),
+        )
+        .unwrap();
+
+        assert_ne!(header_foreground_css(&wine), "#F4F7FF");
+        assert_ne!(header_foreground_css(&teal), "#F4F7FF");
+        assert_ne!(header_foreground_css(&wine), header_foreground_css(&teal));
+        assert!(contrast_ratio(header_foreground(&wine), wine_header) >= 4.5);
+        assert!(contrast_ratio(header_foreground(&teal), teal_header) >= 4.5);
+    }
+
+    #[test]
+    fn achromatic_or_complex_header_falls_back_to_stable_high_contrast_foreground() {
+        let neutral_header = [128, 128, 128];
+        let theme = generate_wallpaper_theme(
+            "file:///display.jpg".into(),
+            "file:///source.png".into(),
+            "Neutral header".into(),
+            &wallpaper_with_header(neutral_header, [30, 45, 60]),
+        )
+        .unwrap();
+        let value = serde_json::to_value(&theme).expect("theme serialization");
+
+        assert_eq!(header_foreground_css(&theme), "#000000");
+        assert!(contrast_ratio(header_foreground(&theme), neutral_header) >= 4.5);
+        assert!(value["contrast"]["header"]["textShadow"]
+            .as_str()
+            .expect("header shadow")
+            .contains("rgba(255,255,255,"));
+    }
+
+    #[test]
+    fn header_palette_serializes_with_generated_themes() {
+        let theme = generate_wallpaper_theme(
+            "file:///display.jpg".into(),
+            "file:///source.png".into(),
+            "Header serialization".into(),
+            &wallpaper_with_header([200, 225, 245], [16, 34, 54]),
+        )
+        .unwrap();
+        let value = serde_json::to_value(theme).expect("theme serialization");
+
+        assert!(value["contrast"]["header"]["foreground"].is_string());
+        assert!(value["contrast"]["header"]["muted"].is_string());
+        assert!(value["contrast"]["header"]["textShadow"].is_string());
     }
 
     #[test]

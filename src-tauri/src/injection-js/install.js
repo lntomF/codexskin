@@ -272,6 +272,10 @@
     };
     const sidebar = textContrastRegion(contrast.sidebar);
     const content = textContrastRegion(contrast.content);
+    // Themes saved before the header region existed are intentionally accepted.
+    // Re-applying any saved wallpaper re-analyses it in Rust; this is only a
+    // compatibility fallback while an old payload is still active.
+    const header = textContrastRegion(contrast.header || contrast.content);
     const infoPanel = textContrastRegion(contrast.infoPanel);
     const composer = composerContrastRegion(contrast.composer);
     const colorScheme = colorSchemeFor(surface);
@@ -290,6 +294,10 @@
   --codeskin-content-foreground: ${content.foreground};
   --codeskin-content-muted: ${content.muted};
   --codeskin-content-text-shadow: ${content.textShadow};
+  --codeskin-header-foreground: ${header.foreground};
+  --codeskin-header-muted-foreground: ${header.muted};
+  --codeskin-header-icon-foreground: ${header.foreground};
+  --codeskin-header-text-shadow: ${header.textShadow};
   --codeskin-sidebar-foreground: ${sidebar.foreground};
   --codeskin-sidebar-muted: ${sidebar.muted};
   --codeskin-sidebar-text-shadow: ${sidebar.textShadow};
@@ -339,11 +347,30 @@
   background-image: none !important;
 }
 /* Text floats directly on the wallpaper. Contrast is regional: no non-composer panel,
-   blur, border, background, or box shadow is introduced by CodeSkin. */
+   blur, border, background, or box shadow is introduced by CodeSkin. The header
+   is sampled from the actual full-width top strip rather than the content area. */
 :root[${ownerAttribute}] .app-header-tint {
-  color: var(--codeskin-content-foreground) !important;
+  color: var(--codeskin-header-foreground) !important;
   background: transparent !important;
-  text-shadow: var(--codeskin-content-text-shadow) !important;
+  text-shadow: var(--codeskin-header-text-shadow) !important;
+}
+/* Current Codex top menu triggers live in .app-header-tint.application-menu-top-bar.
+   Scope this selector so an identically-tokened button in the main surface is not
+   accidentally recoloured as header UI. Do not require the tertiary-token class:
+   the active View trigger replaces it with menubar-selection classes. !important is
+   required because Codex utility classes set the token text colour directly. */
+:root[${ownerAttribute}] .app-header-tint[class*="application-menu-top-bar"]
+button.no-drag[aria-haspopup="menu"] {
+  color: var(--codeskin-header-foreground) !important;
+  text-shadow: var(--codeskin-header-text-shadow) !important;
+}
+/* Header-local navigation and renderer controls inherit the header palette too.
+   SVG icons in Codex use currentColor, so no blanket fill override is needed. */
+:root[${ownerAttribute}] .app-header-tint :is(
+  button[class*="text-token-text-tertiary"], [role="button"][class*="text-token-text-tertiary"]
+) {
+  color: var(--codeskin-header-icon-foreground) !important;
+  text-shadow: var(--codeskin-header-text-shadow) !important;
 }
 :root[${ownerAttribute}] .app-shell-left-panel {
   color: var(--codeskin-sidebar-foreground) !important;
@@ -407,12 +434,8 @@
   color: var(--codeskin-info-foreground) !important;
   text-shadow: var(--codeskin-info-text-shadow) !important;
 }
-/* The app toolbar and its Radix portal menus are likewise outside .main-surface.
-   These are text-only overrides: CodeSkin does not add a surface, blur, border, or shadow. */
-:root[${ownerAttribute}] button.no-drag[aria-haspopup="menu"][class*="text-token-text-tertiary"] {
-  color: var(--codeskin-content-foreground) !important;
-  text-shadow: var(--codeskin-content-text-shadow) !important;
-}
+/* Renderer popup menu contents keep their own main-content palette. The header-only
+   rule above targets the visible title/application-menu triggers, not portal content. */
 :root[${ownerAttribute}] [role="menu"] {
   color: var(--codeskin-content-foreground) !important;
   text-shadow: var(--codeskin-content-text-shadow) !important;

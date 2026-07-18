@@ -74,6 +74,10 @@ pub struct ContrastRegion {
 pub struct ThemeContrast {
     pub sidebar: ContrastRegion,
     pub content: ContrastRegion,
+    /// Top title/application-menu strip sampled across the actual wallpaper header area.
+    /// Optional keeps libraries written before this region was introduced readable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<ContrastRegion>,
     pub info_panel: ContrastRegion,
     pub composer: ContrastRegion,
 }
@@ -324,6 +328,31 @@ mod tests {
         );
         assert!(verification.active);
         assert_eq!(verification.mode.as_deref(), Some("focus"));
+    }
+
+    #[test]
+    fn legacy_contrast_without_header_deserializes_and_omits_missing_header_on_reserialize() {
+        let region = json!({
+            "luminance": 0.25,
+            "complexity": 0.1,
+            "foreground": "#F4F7FF",
+            "muted": "#BBC5D8",
+            "panelColor": "#12161D",
+            "panelOpacity": 0.2,
+            "blurPx": 8,
+            "textShadow": "0 1px 2px rgba(0,0,0,0.42)"
+        });
+        let contrast = serde_json::from_value::<super::ThemeContrast>(json!({
+            "sidebar": region.clone(),
+            "content": region.clone(),
+            "infoPanel": region.clone(),
+            "composer": region
+        }))
+        .expect("legacy contrast should deserialize");
+
+        assert!(contrast.header.is_none());
+        let reserialized = serde_json::to_value(contrast).expect("contrast JSON");
+        assert!(reserialized.get("header").is_none());
     }
 
     #[test]

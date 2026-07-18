@@ -164,6 +164,10 @@ const theme = {
       foreground: "#172033", muted: "#536174", panelColor: "#F7F4EE",
       panelOpacity: 0.18, blurPx: 8, textShadow: "0 1px 2px rgba(255,255,255,0.4)"
     },
+    header: {
+      foreground: "#263744", muted: "#52616D", panelColor: "#F7F4EE",
+      panelOpacity: 0.21, blurPx: 9, textShadow: "0 1px 2px rgba(255,255,255,0.4)"
+    },
     infoPanel: {
       foreground: "#F4F7FF", muted: "#C7D0DC", panelColor: "#12161D",
       panelOpacity: 0.39, blurPx: 15, textShadow: "0 1px 2px rgba(0,0,0,0.4)"
@@ -360,6 +364,8 @@ const injectedSurfaceKeepsWallpaperSharpAndOnlyComposerGlass = () => {
   assert.doesNotMatch(mainSurfaceRule, /backdrop-filter: blur/);
   assert.match(css, /--codeskin-sidebar-foreground: #F4F7FF;/);
   assert.match(css, /--codeskin-content-foreground: #172033;/);
+  assert.match(css, /--codeskin-header-foreground: #263744;/);
+  assert.match(css, /--codeskin-header-muted-foreground: #52616D;/);
   assert.match(css, /--codeskin-info-foreground: #F4F7FF;/);
   assert.match(css, /text-shadow: var\(--codeskin-sidebar-text-shadow\) !important;/);
   assert.match(css, /text-shadow: var\(--codeskin-content-text-shadow\) !important;/);
@@ -414,7 +420,7 @@ const environmentInfoAndTopMenusUseContrastWithoutChangingTheirSurfaces = () => 
   );
   const toolbarRule = cssRule(
     css,
-    ':root[data-codeskin-theme-id] button.no-drag[aria-haspopup="menu"][class*="text-token-text-tertiary"]'
+    ':root[data-codeskin-theme-id] .app-header-tint[class*="application-menu-top-bar"]\nbutton.no-drag[aria-haspopup="menu"]'
   );
   const menuRule = cssRule(css, ':root[data-codeskin-theme-id] [role="menu"]');
 
@@ -430,8 +436,9 @@ const environmentInfoAndTopMenusUseContrastWithoutChangingTheirSurfaces = () => 
   assert.match(environmentRule, /text-shadow: var\(--codeskin-info-text-shadow\) !important;/);
   assert.doesNotMatch(environmentRule, /(?:background(?:-color)?:|border(?:-color)?:|backdrop-filter|box-shadow:)/);
 
-  assert.match(toolbarRule, /color: var\(--codeskin-content-foreground\) !important;/);
-  assert.match(toolbarRule, /text-shadow: var\(--codeskin-content-text-shadow\) !important;/);
+  assert.match(toolbarRule, /color: var\(--codeskin-header-foreground\) !important;/);
+  assert.match(toolbarRule, /text-shadow: var\(--codeskin-header-text-shadow\) !important;/);
+  assert.doesNotMatch(toolbarRule, /--codeskin-content-foreground/);
   assert.doesNotMatch(toolbarRule, /(?:background(?:-color)?:|border(?:-color)?:|backdrop-filter|box-shadow:)/);
 
   assert.match(menuRule, /color: var\(--codeskin-content-foreground\) !important;/);

@@ -176,90 +176,135 @@ mod tests {
     use crate::{
         app_state::AppState,
         cdp::{discover_page_targets, CdpClient},
-        models::{ThemeLibrary, ThemeSource},
+        models::ThemeLibrary,
         process, storage,
     };
+    use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
     use serde_json::{json, Value};
-    use std::{fs, time::Duration};
+    use std::{
+        fs,
+        io::Cursor,
+        time::{Duration, Instant},
+    };
 
     #[tokio::test]
-    #[ignore = "requires a running Codex Desktop instance with loopback CDP and three saved CodeSkin wallpapers"]
-    async fn prints_live_region_foreground_styles_for_saved_wallpapers() {
+    #[ignore = "requires running Codex Desktop with loopback CDP; creates and removes one temporary cool-light wallpaper"]
+    async fn prints_live_header_palette_styles_for_warm_cool_and_dark_wallpapers() {
+        const TEMPORARY_COOL_NAME: &str = "CodeSkin header CDP temporary cool-light";
         let state = AppState::new();
+        let original_selected = storage::load_theme_library()
+            .expect("read original background library")
+            .selected_theme_id;
+
         let verification = async {
+            // The local library has a warm light and several dark examples, but no
+            // cool light header. Import one temporary CodeSkin-managed wallpaper so
+            // the live check exercises all three requested header conditions.
+            let imported =
+                super::import_background(cool_light_wallpaper_png(), TEMPORARY_COOL_NAME.into())?;
+            let cool_id = imported
+                .backgrounds
+                .iter()
+                .find(|background| background.name == TEMPORARY_COOL_NAME)
+                .map(|background| background.id.clone())
+                .ok_or_else(|| {
+                    crate::error::CommandError::new(
+                        "live_cdp_temp_wallpaper_missing",
+                        "临时冷色浅色壁纸未出现在背景库中。",
+                    )
+                })?;
             let library = storage::load_theme_library()?;
-            let background_ids = library
+            let warm_id = library
                 .themes
                 .iter()
-                .filter(|theme| {
-                    theme.source == ThemeSource::Wallpaper && theme.background_image.is_some()
+                .find(|theme| theme.id == "wallpaper-81769f62c8016766")
+                .or_else(|| library.themes.iter().find(|theme| theme.id != cool_id))
+                .map(|theme| theme.id.clone())
+                .ok_or_else(|| {
+                    crate::error::CommandError::new(
+                        "live_cdp_warm_wallpaper_missing",
+                        "实时验证需要至少一张已保存的暖色壁纸。",
+                    )
+                })?;
+            let dark_id = library
+                .themes
+                .iter()
+                .find(|theme| theme.id == "wallpaper-d826f8ee81ab6679")
+                .or_else(|| {
+                    library
+                        .themes
+                        .iter()
+                        .find(|theme| theme.id != warm_id && theme.id != cool_id)
                 })
                 .map(|theme| theme.id.clone())
-                .collect::<Vec<_>>();
-            assert!(
-                background_ids.len() >= 3,
-                "live verification requires at least three saved wallpapers"
-            );
+                .ok_or_else(|| {
+                    crate::error::CommandError::new(
+                        "live_cdp_dark_wallpaper_missing",
+                        "实时验证需要至少一张已保存的深色壁纸。",
+                    )
+                })?;
+            let backgrounds = [
+                ("warm-light", warm_id),
+                ("cool-light", cool_id),
+                ("dark", dark_id),
+            ];
 
             let mut reports = Vec::new();
-            for (index, background_id) in background_ids.into_iter().take(3).enumerate() {
-                let applied = apply_saved_background_by_id(&background_id, &state).await?;
-                assert!(applied.active, "theme {background_id} did not verify as active");
-                tokio::time::sleep(Duration::from_millis(250)).await;
-
+            for (index, (kind, background_id)) in backgrounds.iter().enumerate() {
+                let applied = apply_saved_background_by_id(background_id, &state).await?;
+                assert!(
+                    applied.active,
+                    "theme {background_id} did not verify as active"
+                );
                 let status = process::inspect_running_codex();
                 let port = status
                     .port
-                    .expect("live verification requires a detected loopback CDP port");
+                    .expect("live verification requires detected loopback CDP");
                 let target = discover_page_targets(port)
                     .await?
                     .into_iter()
                     .find(|target| target.url.contains("index.html"))
                     .expect("live verification requires an index.html page target");
                 let client = CdpClient::connect(&target.websocket_url, port).await?;
-                let report = evaluate_live_region_styles(&client).await?;
-                assert_eq!(
-                    report["themeId"].as_str(),
-                    Some(background_id.as_str()),
-                    "the live root must expose the applied theme id"
-                );
-                assert_eq!(report["info"]["color"], report["info"]["expected"]);
+                let report = wait_for_live_theme_report(&client, background_id).await?;
                 assert_eq!(report["topFile"]["color"], report["topFile"]["expected"]);
-                let view_menu = report["viewMenu"]
+                let header_triggers = report["headerMenuTriggers"]
                     .as_array()
-                    .expect("view menu report must be an array");
-                assert!(
-                    !view_menu.is_empty(),
-                    "clicking the real View button must expose at least one expected menu item: {report:#}"
-                );
-                for item in view_menu {
-                    assert_eq!(
-                        item["color"], item["expected"],
-                        "view menu colour mismatch: {item:#}"
-                    );
+                    .expect("header menu trigger array");
+                assert_eq!(header_triggers.len(), 4, "expected File/Edit/View/Help");
+                for trigger in header_triggers {
+                    assert_eq!(trigger["color"], report["headerExpected"]);
                 }
-
+                for icon in report["navigationIcons"]
+                    .as_array()
+                    .expect("navigation icon array")
                 {
-                    let screenshot = client
-                        .call(
-                            "Page.captureScreenshot",
-                            json!({ "format": "png", "captureBeyondViewport": false }),
-                        )
-                        .await?;
-                    let encoded = screenshot
-                        .pointer("/result/data")
-                        .and_then(Value::as_str)
-                        .expect("Page.captureScreenshot must return PNG data");
-                    let directory = std::env::current_dir()
-                        .expect("current workspace directory")
-                        .join("artifacts")
-                        .join("live-cdp");
-                    fs::create_dir_all(&directory).expect("create live CDP screenshot directory");
-                    let file = directory.join(format!("{}-{}.png", index + 1, background_id));
-                    fs::write(&file, decode_base64(encoded)).expect("write live CDP screenshot");
-                    eprintln!("live screenshot: {}", file.display());
+                    assert_eq!(icon["color"], report["headerIconExpected"]);
                 }
 
+                let screenshot = client
+                    .call(
+                        "Page.captureScreenshot",
+                        json!({ "format": "png", "captureBeyondViewport": false }),
+                    )
+                    .await?;
+                let encoded = screenshot
+                    .pointer("/result/data")
+                    .and_then(Value::as_str)
+                    .expect("Page.captureScreenshot must return PNG data");
+                let directory = std::env::current_dir()
+                    .expect("current workspace directory")
+                    .join("artifacts")
+                    .join("live-cdp");
+                fs::create_dir_all(&directory).expect("create live CDP screenshot directory");
+                let file = directory.join(format!(
+                    "header-{}-{}-{}.png",
+                    index + 1,
+                    kind,
+                    background_id
+                ));
+                fs::write(&file, decode_base64(encoded)).expect("write live CDP screenshot");
+                eprintln!("live screenshot: {}", file.display());
                 eprintln!("live CDP report: {report:#}");
                 reports.push(report);
             }
@@ -267,19 +312,75 @@ mod tests {
         }
         .await;
 
-        let restored = state.restore_theme().await;
-        if let Ok(mut library) = storage::load_theme_library() {
-            library.selected_theme_id = None;
-            let _ = storage::save_theme_library(&library);
-        }
+        let restore_result = match original_selected.as_deref() {
+            Some(background_id) => apply_saved_background_by_id(background_id, &state).await,
+            None => state.restore_theme().await,
+        };
+        let cleanup_result = (|| -> Result<(), crate::error::CommandError> {
+            let mut library = storage::load_theme_library()?;
+            while let Some(index) = library
+                .themes
+                .iter()
+                .position(|theme| theme.name == TEMPORARY_COOL_NAME)
+            {
+                let temporary = library.themes.remove(index);
+                storage::delete_managed_background_files([
+                    temporary.background_image,
+                    temporary.source_image,
+                ])?;
+            }
+            library.selected_theme_id = original_selected.clone();
+            storage::save_theme_library(&library)
+        })();
 
-        let reports = verification.expect("live theme verification must succeed");
-        let restored = restored.expect("live verification must restore Codex afterward");
-        assert!(
-            !restored.active,
-            "restore must remove the CodeSkin runtime layers after live verification"
-        );
+        let reports = verification.expect("live header verification must succeed");
+        let restored = restore_result.expect("live verification must restore original appearance");
+        cleanup_result.expect("temporary cool-light wallpaper must be removed");
+        assert!(!restored.active || original_selected.is_some());
         assert_eq!(reports.len(), 3);
+    }
+
+    fn cool_light_wallpaper_png() -> Vec<u8> {
+        let image = RgbImage::from_fn(320, 180, |x, y| {
+            let blue = 235_u8.saturating_sub((y / 10) as u8);
+            let green = 225_u8.saturating_sub((x / 24) as u8);
+            Rgb([198 + (x / 32) as u8, green, blue])
+        });
+        let mut bytes = Vec::new();
+        DynamicImage::ImageRgb8(image)
+            .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
+            .expect("encode temporary cool wallpaper");
+        bytes
+    }
+
+    async fn wait_for_live_theme_report(
+        client: &CdpClient,
+        expected_theme_id: &str,
+    ) -> Result<Value, crate::error::CommandError> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+
+        loop {
+            let observation = match evaluate_live_region_styles(client).await {
+                Ok(report) if report["themeId"].as_str() == Some(expected_theme_id) => {
+                    return Ok(report);
+                }
+                Ok(report) => format!(
+                    "renderer still reports theme {:?}",
+                    report["themeId"].as_str()
+                ),
+                Err(error) => format!("{}: {}", error.code, error.message),
+            };
+
+            if Instant::now() >= deadline {
+                return Err(crate::error::CommandError::new(
+                    "live_header_theme_wait_timeout",
+                    format!(
+                        "等待 Codex renderer 应用主题 {expected_theme_id} 超时（最后状态：{observation}）。"
+                    ),
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 
     async fn evaluate_live_region_styles(
@@ -290,6 +391,7 @@ mod tests {
   const root = document.documentElement;
   const infoSelector = '[class*="bg-token-dropdown-background"]:has([class~="group/summary-panel-item"])';
   const triggerSelector = 'button.no-drag[aria-haspopup="menu"][class*="text-token-text-tertiary"]';
+  const headerMenuSelector = '.app-header-tint[class*="application-menu-top-bar"] button.no-drag[aria-haspopup="menu"]';
   const normalise = (value) => {
     const probe = document.createElement('span');
     probe.style.color = value;
@@ -299,10 +401,20 @@ mod tests {
     return resolved;
   };
   const contentExpected = normalise(getComputedStyle(root).getPropertyValue('--codeskin-content-foreground').trim());
+  const headerExpected = normalise(getComputedStyle(root).getPropertyValue('--codeskin-header-foreground').trim());
+  const headerIconExpected = normalise(getComputedStyle(root).getPropertyValue('--codeskin-header-icon-foreground').trim());
   const infoExpected = normalise(getComputedStyle(root).getPropertyValue('--codeskin-info-foreground').trim());
+  const describe = (node, selector) => node ? {
+    selector, matchCount: document.querySelectorAll(selector).length, tag: node.tagName,
+    class: node.className, text: node.textContent.trim(), color: getComputedStyle(node).color,
+    root: node.getRootNode() === document ? 'document' : (node.getRootNode() instanceof ShadowRoot ? 'shadow-dom' : 'other'),
+    iframe: window.top !== window,
+    ancestors: (() => { const values=[]; for(let current=node; current && values.length<6; current=current.parentElement){ values.push(`${current.tagName.toLowerCase()}.${String(current.className || '').replace(/\s+/g,'.')}`); } return values; })()
+  } : null;
   const buttons = [...document.querySelectorAll(triggerSelector)];
-  const topFile = buttons.find((node) => /^(文件|File)$/i.test(node.textContent.trim())) || buttons[0] || null;
-  const view = buttons.find((node) => /^(视图|View)$/i.test(node.textContent.trim()));
+  const headerButtons = [...document.querySelectorAll(headerMenuSelector)];
+  const topFile = headerButtons.find((node) => /^(文件|File)$/i.test(node.textContent.trim())) || headerButtons[0] || null;
+  const view = headerButtons.find((node) => /^(视图|View)$/i.test(node.textContent.trim()));
   if (view) {
     view.click();
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -316,11 +428,22 @@ mod tests {
   return {
     themeId: root.getAttribute('data-codeskin-theme-id'),
     variables: {
+      headerForeground: getComputedStyle(root).getPropertyValue('--codeskin-header-foreground').trim(),
+      headerMutedForeground: getComputedStyle(root).getPropertyValue('--codeskin-header-muted-foreground').trim(),
       contentForeground: getComputedStyle(root).getPropertyValue('--codeskin-content-foreground').trim(),
       infoForeground: getComputedStyle(root).getPropertyValue('--codeskin-info-foreground').trim()
     },
+    headerExpected,
+    headerIconExpected,
+    headerContainer: describe(document.querySelector('.app-header-tint[class*="application-menu-top-bar"]'), '.app-header-tint[class*="application-menu-top-bar"]'),
+    topMenuTriggers: buttons.map((node) => describe(node, triggerSelector)),
+    headerMenuTriggers: [...document.querySelectorAll(headerMenuSelector)].map((node) => describe(node, headerMenuSelector)),
     info: info ? { color: getComputedStyle(info).color, expected: infoExpected } : null,
-    topFile: topFile ? { label: topFile.textContent.trim(), color: getComputedStyle(topFile).color, expected: contentExpected } : null,
+    topFile: topFile ? { label: topFile.textContent.trim(), color: getComputedStyle(topFile).color, expected: headerExpected } : null,
+    navigationIcons: [...document.querySelectorAll('.app-header-tint button[aria-label]')]
+      .filter((node) => /侧边栏|sidebar|back|forward|后退|前进/i.test(node.getAttribute('aria-label') || ''))
+      .map((node) => ({ label: node.getAttribute('aria-label'), color: getComputedStyle(node).color })),
+    windowControls: ['minimize','maximize','restore','close','最小化','最大化','还原','关闭'].map((label) => ({ label, count: document.querySelectorAll(`[aria-label*="${label}"], [title*="${label}"]`).length })),
     viewMenu
   };
 })()
