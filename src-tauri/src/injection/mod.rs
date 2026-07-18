@@ -6,10 +6,7 @@ pub use scripts::{INSTALL_SCRIPT, RESTORE_SCRIPT, VERIFY_SCRIPT};
 pub use theme::install_expression;
 #[cfg(test)]
 mod tests {
-    use super::{
-        install_expression, theme::ThemePayload, INSTALL_SCRIPT, RESTORE_SCRIPT, VERIFY_SCRIPT,
-    };
-    use crate::models::Theme;
+    use super::{theme::ThemePayload, INSTALL_SCRIPT, RESTORE_SCRIPT, VERIFY_SCRIPT};
     use std::process::Command;
     #[test]
     fn install_script_uses_only_codeskin_owned_markers() {
@@ -25,17 +22,61 @@ mod tests {
         assert!(!INSTALL_SCRIPT.contains("document.body.innerHTML"));
     }
     #[test]
+    fn wallpaper_is_layered_below_codex_and_only_the_composer_is_glass() {
+        assert!(INSTALL_SCRIPT.contains("z-index: 0;"));
+        assert!(INSTALL_SCRIPT.contains("] #root {"));
+        assert!(INSTALL_SCRIPT.contains("z-index: 1;"));
+        assert!(INSTALL_SCRIPT.contains(".main-surface"));
+        assert!(INSTALL_SCRIPT.contains(".app-header-tint"));
+        assert!(INSTALL_SCRIPT
+            .contains("Math.min(numberValue(layers.focusOverlayOpacity, 0.18), 0.22)"));
+        assert!(INSTALL_SCRIPT.contains("background: transparent !important;"));
+        assert!(INSTALL_SCRIPT.contains(".composer-surface-chrome"));
+        assert!(INSTALL_SCRIPT
+            .contains("backdrop-filter: blur(var(--codeskin-composer-blur)) saturate(112%);"));
+        assert!(INSTALL_SCRIPT.contains("--codeskin-sidebar-foreground"));
+        assert!(INSTALL_SCRIPT.contains("--codeskin-content-foreground"));
+        assert!(INSTALL_SCRIPT.contains("--codeskin-info-foreground"));
+        assert!(!INSTALL_SCRIPT.contains("--codeskin-sidebar-panel-opacity"));
+        assert!(!INSTALL_SCRIPT.contains("--codeskin-content-panel-opacity"));
+        assert!(!INSTALL_SCRIPT.contains("--codeskin-info-panel-opacity"));
+        assert!(!INSTALL_SCRIPT.contains("--codeskin-sidebar-blur"));
+        assert!(!INSTALL_SCRIPT.contains("--codeskin-content-blur"));
+        assert!(!INSTALL_SCRIPT.contains("--codeskin-info-blur"));
+        assert!(!INSTALL_SCRIPT.contains(":root[data-codeskin-theme-id] button,"));
+    }
+    #[test]
+    fn environment_summary_and_toolbar_portal_text_follow_contrast_without_surface_overrides() {
+        assert!(INSTALL_SCRIPT.contains("group/summary-panel-item"));
+        assert!(INSTALL_SCRIPT.contains("button.no-drag[aria-haspopup=\"menu\"]"));
+        assert!(INSTALL_SCRIPT.contains("[role=\"menu\"]"));
+        assert!(INSTALL_SCRIPT.contains("aria-expanded"));
+        assert!(INSTALL_SCRIPT.contains("data-state"));
+        assert!(!INSTALL_SCRIPT
+            .contains(":root[data-codeskin-theme-id] [role=\"menu\"] {\n  background"));
+    }
+    #[test]
     fn payload_json_escapes_theme_values() {
-        let theme = Theme::builtin().into_iter().next().expect("built-in theme");
-        let payload = ThemePayload::from_theme(&theme);
+        let payload = ThemePayload {
+            id: "wallpaper-test".into(),
+            colors: crate::models::ThemeColors {
+                accent: "#112233".into(),
+                secondary: "#8B9DFF".into(),
+                background: "#111111".into(),
+                surface: "#222222".into(),
+                foreground: "#FFFFFF".into(),
+                muted: "#AAAAAA".into(),
+            },
+            background_image: Some("data:image/jpeg;base64,/9j/2Q==".into()),
+            layers: crate::models::ThemeLayers::wallpaper(),
+            contrast: None,
+        };
         assert!(serde_json::to_string(&payload).is_ok());
     }
     #[test]
-    fn install_expression_contains_camel_case_layer_parameters() {
-        let theme = Theme::builtin().into_iter().next().expect("built-in theme");
-        let expression = install_expression(&theme).expect("install expression");
-        assert!(expression.contains("ambientOverlayOpacity"));
-        assert!(expression.contains("focusOverlayOpacity"));
+    fn install_script_uses_camel_case_layer_parameters() {
+        assert!(INSTALL_SCRIPT.contains("ambientOverlayOpacity"));
+        assert!(INSTALL_SCRIPT.contains("focusOverlayOpacity"));
     }
     #[test]
     fn install_script_defers_when_document_root_is_not_ready() {
@@ -64,14 +105,15 @@ mod tests {
         assert!(VERIFY_SCRIPT.contains("__codeskinModeObserver"));
     }
     #[test]
-    fn install_script_rejects_unsafe_css_colors_and_remote_wallpapers() {
+    fn install_script_accepts_only_a_bounded_jpeg_data_url() {
         assert!(INSTALL_SCRIPT.contains("/^#[0-9A-Fa-f]{6}$/"));
         assert!(INSTALL_SCRIPT.contains("FALLBACK_COLORS"));
         assert!(INSTALL_SCRIPT.contains("safeBackgroundImage"));
-        assert!(INSTALL_SCRIPT.contains("parsed.protocol !== \"file:\""));
-        assert!(INSTALL_SCRIPT.contains("parsed.hostname !== \"\""));
-        assert!(INSTALL_SCRIPT.contains("parsed.pathname.startsWith(\"//\")"));
-        assert!(INSTALL_SCRIPT.contains("WINDOWS_ABSOLUTE_PATH"));
+        assert!(INSTALL_SCRIPT.contains("JPEG_DATA_URL"));
+        assert!(INSTALL_SCRIPT.contains("MAX_JPEG_DATA_URL_LENGTH"));
+        assert!(INSTALL_SCRIPT.contains("data:image\\/jpeg;base64"));
+        assert!(!INSTALL_SCRIPT.contains("parsed.protocol"));
+        assert!(!INSTALL_SCRIPT.contains("WINDOWS_ABSOLUTE_PATH"));
     }
     #[test]
     fn mode_observer_coalesces_updates_and_defaults_incomplete_dom_to_focus() {

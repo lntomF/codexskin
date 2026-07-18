@@ -1,17 +1,34 @@
 use crate::error::CommandError;
-use image::ImageFormat;
+use image::{
+    codecs::jpeg::JpegEncoder, imageops::FilterType, DynamicImage, GenericImageView, ImageFormat,
+};
 use std::{
     fs::{self, OpenOptions},
-    io::Write,
+    io::{Cursor, Write},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 const MAX_BACKGROUND_BYTES: usize = 12 * 1024 * 1024;
 const MAX_BACKGROUND_DIMENSION: u32 = 8192;
+const DISPLAY_WIDTH: u32 = 2560;
+const DISPLAY_HEIGHT: u32 = 1440;
+const JPEG_QUALITY: u8 = 90;
+const PREVIEW_WIDTH: u32 = 480;
+const PREVIEW_HEIGHT: u32 = 270;
+const PREVIEW_JPEG_QUALITY: u8 = 78;
+const MAX_PREVIEW_BYTES: usize = 512 * 1024;
+const BASE64_ALPHABET: &[u8; 64] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 const MAX_OUTPUT_PATH_ATTEMPTS: u32 = 128;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedBackground {
+    pub source_image: String,
+    pub display_image: String,
+}
 
 pub fn validate_background_bytes(bytes: &[u8]) -> Result<ImageFormat, CommandError> {
     if bytes.is_empty() {
@@ -44,66 +61,40 @@ pub fn validate_background_bytes(bytes: &[u8]) -> Result<ImageFormat, CommandErr
             "背景图宽高均不能超过 8192 像素。",
         ));
     }
-
     Ok(format)
 }
 
-pub fn import_background_bytes(bytes: &[u8]) -> Result<String, CommandError> {
-    let root = strict_wallpaper_root()?;
-    import_background_bytes_to_root(bytes, &root)
-}
-
-fn import_background_bytes_to_root(bytes: &[u8], root: &Path) -> Result<String, CommandError> {
+/// Retains the uploaded source and creates a CodeSkin-owned 2560 x 1440 JPEG.
+/// Non-16:9 sources are cropped from the centre before resampling.
+pub fn import_background_bytes(bytes: &[u8]) -> Result<ImportedBackground, CommandError> {
     let format = validate_background_bytes(bytes)?;
+    let decoded = image::load_from_memory(bytes)
+        .map_err(|error| CommandError::new("background_decode_failed", error.to_string()))?;
+    let display = crop_center_to_16_by_9(&decoded).resize_exact(
+        DISPLAY_WIDTH,
+        DISPLAY_HEIGHT,
+        FilterType::Lanczos3,
+    );
+    let root = strict_wallpaper_root()?;
+    fs::create_dir_all(&root).map_err(|error| {
+        CommandError::new("background_directory_create_failed", error.to_string())
+    })?;
+
     let sequence = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| CommandError::new("background_timestamp_failed", error.to_string()))?
         .as_millis();
-    import_background_bytes_to_root_with_name_parts(
-        bytes,
-        root,
-        sequence,
-        format,
-        stable_bytes_hash(bytes),
-    )
-}
-
-fn import_background_bytes_to_root_with_name_parts(
-    bytes: &[u8],
-    root: &Path,
-    sequence: u128,
-    format: ImageFormat,
-    bytes_hash: u64,
-) -> Result<String, CommandError> {
-    import_validated_background_bytes_to_root(bytes, root, sequence, format, bytes_hash)
-}
-
-fn import_validated_background_bytes_to_root(
-    bytes: &[u8],
-    root: &Path,
-    sequence: u128,
-    format: ImageFormat,
-    bytes_hash: u64,
-) -> Result<String, CommandError> {
-    fs::create_dir_all(root).map_err(|error| {
-        CommandError::new("background_directory_create_failed", error.to_string())
-    })?;
+    let hash = stable_bytes_hash(bytes);
+    let extension = extension_for(format);
 
     for attempt in 0..MAX_OUTPUT_PATH_ATTEMPTS {
-        let path = wallpaper_output_path(root, sequence, format, bytes_hash, attempt);
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut file) => {
-                if let Err(error) = file.write_all(bytes) {
-                    let _ = fs::remove_file(&path);
-                    return Err(CommandError::new(
-                        "background_write_failed",
-                        error.to_string(),
-                    ));
-                }
-
-                let normalized = path.to_string_lossy().replace('\\', "/");
-                return Ok(format!("file:///{normalized}"));
-            }
+        let (source_path, display_path) = output_paths(&root, sequence, hash, extension, attempt);
+        let mut source_file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&source_path)
+        {
+            Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
                 return Err(CommandError::new(
@@ -111,22 +102,237 @@ fn import_validated_background_bytes_to_root(
                     error.to_string(),
                 ))
             }
+        };
+        if let Err(error) = source_file.write_all(bytes) {
+            let _ = fs::remove_file(&source_path);
+            return Err(CommandError::new(
+                "background_write_failed",
+                error.to_string(),
+            ));
+        }
+        drop(source_file);
+
+        let write_result = (|| -> Result<(), CommandError> {
+            let file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&display_path)
+                .map_err(|error| CommandError::new("background_write_failed", error.to_string()))?;
+            let mut encoder = JpegEncoder::new_with_quality(file, JPEG_QUALITY);
+            encoder
+                .encode_image(&display)
+                .map_err(|error| CommandError::new("background_derive_failed", error.to_string()))
+        })();
+        match write_result {
+            Ok(()) => {
+                return Ok(ImportedBackground {
+                    source_image: file_url(&source_path),
+                    display_image: file_url(&display_path),
+                })
+            }
+            Err(error) if display_path.exists() => {
+                let _ = fs::remove_file(&source_path);
+                let _ = fs::remove_file(&display_path);
+                if error.message.contains("already exists") {
+                    continue;
+                }
+                return Err(error);
+            }
+            Err(error) => {
+                let _ = fs::remove_file(&source_path);
+                return Err(error);
+            }
         }
     }
-
     Err(CommandError::new(
         "background_name_collision",
         "无法为背景图分配唯一文件名。",
     ))
 }
 
-fn strict_wallpaper_root() -> Result<PathBuf, CommandError> {
-    wallpaper_directory_from_local_app_data(std::env::var_os("LOCALAPPDATA"))
+/// Reads one CodeSkin-managed wallpaper after resolving it inside the managed
+/// wallpaper directory. This is intentionally not a general local-file reader:
+/// persisted theme data must never turn into permission to read arbitrary paths.
+pub(crate) fn read_managed_background_bytes(file_url: &str) -> Result<Vec<u8>, CommandError> {
+    let root = strict_wallpaper_root()?;
+    read_managed_background_bytes_from_root(file_url, &root)
 }
-fn wallpaper_directory_from_local_app_data(
-    local_app_data: Option<std::ffi::OsString>,
-) -> Result<PathBuf, CommandError> {
-    let local_app_data = local_app_data
+
+fn read_managed_background_bytes_from_root(
+    file_url: &str,
+    root: &Path,
+) -> Result<Vec<u8>, CommandError> {
+    let path = local_file_url_path(file_url)
+        .ok_or_else(|| CommandError::new("background_read_url_invalid", "背景图路径格式无效。"))?;
+    let canonical_root = root.canonicalize().map_err(|error| {
+        CommandError::new(
+            "background_storage_unavailable",
+            format!("无法访问 CodeSkin 壁纸目录：{error}"),
+        )
+    })?;
+    let canonical_path = path.canonicalize().map_err(|error| {
+        CommandError::new(
+            "background_file_unavailable",
+            format!("无法访问背景图：{error}"),
+        )
+    })?;
+    if !canonical_path.starts_with(&canonical_root) || !canonical_path.is_file() {
+        return Err(CommandError::new(
+            "background_not_managed",
+            "只允许读取 CodeSkin 管理的本地背景图。",
+        ));
+    }
+    fs::read(&canonical_path).map_err(|error| {
+        CommandError::new("background_read_failed", format!("读取背景图失败：{error}"))
+    })
+}
+
+/// Creates a small, in-memory JPEG preview for the Tauri UI. The file URL is
+/// only read after it has been canonicalized inside CodeSkin's wallpaper folder;
+/// the WebView never gets a filesystem path or a broad local-file permission.
+pub(crate) fn wallpaper_preview_data_url(background_image: Option<&str>) -> Option<String> {
+    let root = strict_wallpaper_root().ok()?;
+    background_image.and_then(|url| managed_preview_data_url_from_root(url, &root).ok())
+}
+
+fn managed_preview_data_url_from_root(file_url: &str, root: &Path) -> Result<String, CommandError> {
+    let path = local_file_url_path(file_url).ok_or_else(|| {
+        CommandError::new("background_preview_url_invalid", "背景预览路径格式无效。")
+    })?;
+    let canonical_root = root.canonicalize().map_err(|error| {
+        CommandError::new(
+            "background_storage_unavailable",
+            format!("无法访问 CodeSkin 壁纸目录：{error}"),
+        )
+    })?;
+    let canonical_path = path.canonicalize().map_err(|error| {
+        CommandError::new(
+            "background_file_unavailable",
+            format!("无法访问背景预览图片：{error}"),
+        )
+    })?;
+    if !canonical_path.starts_with(&canonical_root) || !canonical_path.is_file() {
+        return Err(CommandError::new(
+            "background_not_managed",
+            "只允许预览 CodeSkin 管理的本地背景图。",
+        ));
+    }
+
+    let bytes = fs::read(&canonical_path).map_err(|error| {
+        CommandError::new(
+            "background_read_failed",
+            format!("读取背景预览失败：{error}"),
+        )
+    })?;
+    if bytes.is_empty() || bytes.len() > MAX_BACKGROUND_BYTES {
+        return Err(CommandError::new(
+            "background_preview_size_invalid",
+            "背景预览源文件为空或超过允许大小。",
+        ));
+    }
+    if image::guess_format(&bytes).ok() != Some(ImageFormat::Jpeg) {
+        return Err(CommandError::new(
+            "background_preview_format_invalid",
+            "背景预览只能来自 CodeSkin 派生的 JPEG。",
+        ));
+    }
+    let preview = image::load_from_memory(&bytes)
+        .map_err(|error| CommandError::new("background_decode_failed", error.to_string()))?
+        .resize_to_fill(PREVIEW_WIDTH, PREVIEW_HEIGHT, FilterType::Triangle);
+    let mut encoded = Cursor::new(Vec::new());
+    JpegEncoder::new_with_quality(&mut encoded, PREVIEW_JPEG_QUALITY)
+        .encode_image(&preview)
+        .map_err(|error| {
+            CommandError::new("background_preview_encode_failed", error.to_string())
+        })?;
+    let encoded = encoded.into_inner();
+    if encoded.len() > MAX_PREVIEW_BYTES {
+        return Err(CommandError::new(
+            "background_preview_too_large",
+            "生成的背景缩略图超过允许大小。",
+        ));
+    }
+    Ok(format!(
+        "data:image/jpeg;base64,{}",
+        base64_encode(&encoded)
+    ))
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let first = chunk[0];
+        let second = *chunk.get(1).unwrap_or(&0);
+        let third = *chunk.get(2).unwrap_or(&0);
+        output.push(BASE64_ALPHABET[(first >> 2) as usize] as char);
+        output
+            .push(BASE64_ALPHABET[(((first & 0b0000_0011) << 4) | (second >> 4)) as usize] as char);
+        match chunk.len() {
+            1 => output.push_str("=="),
+            2 => {
+                output.push(
+                    BASE64_ALPHABET[(((second & 0b0000_1111) << 2) | (third >> 6)) as usize]
+                        as char,
+                );
+                output.push('=');
+            }
+            _ => {
+                output.push(
+                    BASE64_ALPHABET[(((second & 0b0000_1111) << 2) | (third >> 6)) as usize]
+                        as char,
+                );
+                output.push(BASE64_ALPHABET[(third & 0b0011_1111) as usize] as char);
+            }
+        }
+    }
+    output
+}
+
+/// Deletes only files under `%LOCALAPPDATA%\\CodeSkin\\wallpapers`.
+pub fn delete_managed_background_files(
+    urls: impl IntoIterator<Item = Option<String>>,
+) -> Result<(), CommandError> {
+    let root = strict_wallpaper_root()?;
+    let canonical_root = root.canonicalize().unwrap_or(root);
+    for url in urls.into_iter().flatten() {
+        let Some(path) = local_file_url_path(&url) else {
+            continue;
+        };
+        let Ok(candidate) = path.canonicalize() else {
+            continue;
+        };
+        if !candidate.starts_with(&canonical_root) {
+            continue;
+        }
+        if candidate.is_file() {
+            fs::remove_file(&candidate).map_err(|error| {
+                CommandError::new("background_delete_failed", error.to_string())
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn crop_center_to_16_by_9(image: &DynamicImage) -> DynamicImage {
+    let (width, height) = image.dimensions();
+    // Use the largest exact 16:9 rectangle with integer pixel dimensions. This
+    // avoids a one-pixel aspect-ratio drift for inputs such as 900 x 1600.
+    let scale = (width / 16).min(height / 9);
+    if scale == 0 {
+        return image.clone();
+    }
+    let crop_width = scale * 16;
+    let crop_height = scale * 9;
+    image.crop_imm(
+        (width - crop_width) / 2,
+        (height - crop_height) / 2,
+        crop_width,
+        crop_height,
+    )
+}
+
+pub(crate) fn wallpaper_root() -> Result<PathBuf, CommandError> {
+    let local_app_data = std::env::var_os("LOCALAPPDATA")
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
             CommandError::new(
@@ -134,27 +340,36 @@ fn wallpaper_directory_from_local_app_data(
                 "无法读取 LOCALAPPDATA，不能确定壁纸存储目录。",
             )
         })?;
-    Ok(PathBuf::from(local_app_data)
+    let root = PathBuf::from(local_app_data)
         .join("CodeSkin")
-        .join("wallpapers"))
+        .join("wallpapers");
+    fs::create_dir_all(&root).map_err(|error| {
+        CommandError::new("background_directory_create_failed", error.to_string())
+    })?;
+    Ok(root)
 }
 
-fn wallpaper_output_path(
-    directory: &Path,
+fn strict_wallpaper_root() -> Result<PathBuf, CommandError> {
+    wallpaper_root()
+}
+
+fn output_paths(
+    root: &Path,
     sequence: u128,
-    format: ImageFormat,
-    bytes_hash: u64,
+    hash: u64,
+    extension: &str,
     attempt: u32,
-) -> PathBuf {
-    let collision_suffix = if attempt == 0 {
+) -> (PathBuf, PathBuf) {
+    let suffix = if attempt == 0 {
         String::new()
     } else {
         format!("-{attempt}")
     };
-    directory.join(format!(
-        "wallpaper-{sequence}-{bytes_hash:016x}{collision_suffix}.{}",
-        extension_for(format)
-    ))
+    let stem = format!("background-{sequence}-{hash:016x}{suffix}");
+    (
+        root.join(format!("{stem}-source.{extension}")),
+        root.join(format!("{stem}-display.jpg")),
+    )
 }
 
 fn extension_for(format: ImageFormat) -> &'static str {
@@ -162,8 +377,17 @@ fn extension_for(format: ImageFormat) -> &'static str {
         ImageFormat::Png => "png",
         ImageFormat::Jpeg => "jpg",
         ImageFormat::WebP => "webp",
-        _ => unreachable!("validated formats are exhaustive"),
+        _ => unreachable!(),
     }
+}
+
+fn file_url(path: &Path) -> String {
+    format!("file:///{}", path.to_string_lossy().replace('\\', "/"))
+}
+
+fn local_file_url_path(url: &str) -> Option<PathBuf> {
+    let path = url.strip_prefix("file:///")?;
+    Some(PathBuf::from(path.replace('/', "\\")))
 }
 
 fn stable_bytes_hash(bytes: &[u8]) -> u64 {
@@ -175,240 +399,85 @@ fn stable_bytes_hash(bytes: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        import_background_bytes_to_root, import_background_bytes_to_root_with_name_parts,
-        strict_wallpaper_root, validate_background_bytes, wallpaper_directory_from_local_app_data,
-        wallpaper_output_path, MAX_BACKGROUND_DIMENSION,
+        crop_center_to_16_by_9, managed_preview_data_url_from_root, validate_background_bytes,
+        DISPLAY_HEIGHT, DISPLAY_WIDTH,
     };
-    use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
+    use image::{
+        codecs::jpeg::JpegEncoder, DynamicImage, ImageFormat, Rgb, RgbImage, Rgba, RgbaImage,
+    };
     use std::{
-        ffi::OsString,
         fs,
         io::Cursor,
-        path::{Path, PathBuf},
-        process,
-        sync::atomic::{AtomicU64, Ordering},
+        path::PathBuf,
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    static TEST_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-    fn image_bytes(format: ImageFormat) -> Vec<u8> {
-        let image = RgbaImage::from_pixel(3, 2, Rgba([12, 34, 56, 255]));
-        let mut bytes = Vec::new();
-        DynamicImage::ImageRgba8(image)
-            .write_to(&mut Cursor::new(&mut bytes), format)
-            .expect("encode test image");
-        bytes
+    fn temporary_wallpaper_root() -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let root = std::env::temp_dir()
+            .join(format!("codeskin-preview-test-{unique}"))
+            .join("wallpapers");
+        fs::create_dir_all(&root).expect("create test wallpaper root");
+        root
     }
 
-    fn directory_entries(directory: &Path) -> Vec<PathBuf> {
-        let mut paths = fs::read_dir(directory)
-            .expect("read isolated wallpaper directory")
-            .map(|entry| {
-                entry
-                    .expect("read isolated wallpaper directory entry")
-                    .path()
-            })
-            .collect::<Vec<_>>();
-        paths.sort();
-        paths
+    fn file_url(path: &std::path::Path) -> String {
+        format!("file:///{}", path.to_string_lossy().replace('\\', "/"))
     }
 
-    fn file_path_from_url(file_url: &str) -> PathBuf {
-        PathBuf::from(
-            file_url
-                .strip_prefix("file:///")
-                .expect("background import returns a file URL"),
-        )
+    #[test]
+    fn managed_preview_uses_a_small_jpeg_data_url() {
+        let root = temporary_wallpaper_root();
+        let display = root.join("display.jpg");
+        let image = RgbImage::from_pixel(1280, 720, Rgb([32, 64, 128]));
+        JpegEncoder::new_with_quality(fs::File::create(&display).unwrap(), 90)
+            .encode_image(&image)
+            .expect("write fixture JPEG");
+
+        let preview =
+            managed_preview_data_url_from_root(&file_url(&display), &root).expect("create preview");
+        assert!(preview.starts_with("data:image/jpeg;base64,/9j/"));
+        assert!(preview.len() < 512 * 1024);
+
+        fs::remove_dir_all(root.parent().expect("test root parent")).expect("remove test root");
     }
 
-    struct TestDirectory {
-        path: PathBuf,
+    #[test]
+    fn managed_preview_rejects_a_file_outside_the_wallpaper_root() {
+        let root = temporary_wallpaper_root();
+        let outside = root.parent().expect("test root parent").join("outside.jpg");
+        fs::write(&outside, [0xFF, 0xD8, 0xFF, 0xD9]).expect("write outside JPEG");
+
+        let error = managed_preview_data_url_from_root(&file_url(&outside), &root)
+            .expect_err("outside files must be rejected");
+        assert_eq!(error.code, "background_not_managed");
+
+        fs::remove_dir_all(root.parent().expect("test root parent")).expect("remove test root");
     }
 
-    impl TestDirectory {
-        fn new() -> Self {
-            let sequence = TEST_DIRECTORY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-            let timestamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("system clock must be after the Unix epoch")
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!(
-                "codeskin-background-tests-{}-{timestamp}-{sequence}",
-                process::id()
-            ));
-            fs::create_dir(&path).expect("create unique isolated wallpaper directory");
-            Self { path }
-        }
-
-        fn path(&self) -> &Path {
-            &self.path
-        }
-    }
-
-    impl Drop for TestDirectory {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
+    #[test]
+    fn accepts_supported_image_formats() {
+        let image = DynamicImage::ImageRgba8(RgbaImage::from_pixel(16, 9, Rgba([1, 2, 3, 255])));
+        for format in [ImageFormat::Png, ImageFormat::Jpeg, ImageFormat::WebP] {
+            let mut bytes = Vec::new();
+            image
+                .write_to(&mut Cursor::new(&mut bytes), format)
+                .unwrap();
+            assert_eq!(validate_background_bytes(&bytes).unwrap(), format);
         }
     }
 
     #[test]
-    fn rejects_large_background_input_with_the_existing_code() {
-        let directory = TestDirectory::new();
-        let too_large = vec![0_u8; 12 * 1024 * 1024 + 1];
-
-        let error = validate_background_bytes(&too_large).expect_err("oversized input must fail");
-        assert_eq!(error.code, "background_too_large");
-
-        let error = import_background_bytes_to_root(&too_large, directory.path())
-            .expect_err("oversized import must fail");
-        assert_eq!(error.code, "background_too_large");
-        assert!(directory_entries(directory.path()).is_empty());
-    }
-
-    #[test]
-    fn rejects_dimensions_larger_than_the_limit() {
-        let directory = TestDirectory::new();
-        let oversized = RgbaImage::new(MAX_BACKGROUND_DIMENSION + 1, 1);
-        let mut bytes = Vec::new();
-        DynamicImage::ImageRgba8(oversized)
-            .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
-            .expect("encode oversized PNG");
-
-        let error = validate_background_bytes(&bytes).expect_err("oversized dimensions must fail");
-        assert_eq!(error.code, "background_dimensions_too_large");
-
-        let error = import_background_bytes_to_root(&bytes, directory.path())
-            .expect_err("oversized dimension import must fail");
-        assert_eq!(error.code, "background_dimensions_too_large");
-        assert!(directory_entries(directory.path()).is_empty());
-    }
-
-    #[test]
-    fn malformed_backgrounds_fail_without_creating_isolated_files() {
-        let directory = TestDirectory::new();
-        let truncated_png = b"\x89PNG\r\n\x1a\n";
+    fn center_crops_portrait_input_to_display_ratio() {
+        let image =
+            DynamicImage::ImageRgba8(RgbaImage::from_pixel(900, 1600, Rgba([1, 2, 3, 255])));
+        let cropped = crop_center_to_16_by_9(&image);
         assert_eq!(
-            image::guess_format(truncated_png).expect("PNG signature must be recognized"),
-            ImageFormat::Png
-        );
-
-        for bytes in [b"not an image".as_slice(), truncated_png.as_slice()] {
-            let error = import_background_bytes_to_root(bytes, directory.path())
-                .expect_err("malformed image import must fail");
-            assert_eq!(error.code, "background_decode_failed");
-            assert!(directory_entries(directory.path()).is_empty());
-        }
-    }
-
-    #[test]
-    fn imports_recognized_formats_into_an_isolated_directory_with_matching_extensions() {
-        let directory = TestDirectory::new();
-
-        for (format, extension) in [
-            (ImageFormat::Png, "png"),
-            (ImageFormat::Jpeg, "jpg"),
-            (ImageFormat::WebP, "webp"),
-        ] {
-            let bytes = image_bytes(format);
-            assert_eq!(
-                validate_background_bytes(&bytes).expect("recognized format"),
-                format
-            );
-
-            let file_url = import_background_bytes_to_root(&bytes, directory.path())
-                .expect("import background into isolated directory");
-            let path = file_path_from_url(&file_url);
-
-            assert!(path.starts_with(directory.path()));
-            assert_eq!(path.parent(), Some(directory.path()));
-            assert_eq!(
-                path.extension().and_then(|extension| extension.to_str()),
-                Some(extension)
-            );
-            assert_eq!(
-                fs::read(path).expect("read isolated imported background"),
-                bytes
-            );
-        }
-    }
-
-    #[test]
-    fn retries_when_the_preferred_output_path_is_already_occupied() {
-        let directory = TestDirectory::new();
-        let bytes = image_bytes(ImageFormat::Png);
-        let sequence = 42;
-        let bytes_hash = 0x1111;
-        let preferred =
-            wallpaper_output_path(directory.path(), sequence, ImageFormat::Png, bytes_hash, 0);
-        fs::write(&preferred, b"existing wallpaper").expect("occupy preferred wallpaper path");
-
-        let file_url = import_background_bytes_to_root_with_name_parts(
-            &bytes,
-            directory.path(),
-            sequence,
-            ImageFormat::Png,
-            bytes_hash,
-        )
-        .expect("retry an occupied wallpaper path");
-        let imported = file_path_from_url(&file_url);
-        let retry_path =
-            wallpaper_output_path(directory.path(), sequence, ImageFormat::Png, bytes_hash, 1);
-
-        assert_eq!(
-            fs::read(&preferred).expect("read original wallpaper"),
-            b"existing wallpaper"
-        );
-        assert_eq!(imported, retry_path);
-        assert_eq!(fs::read(retry_path).expect("read retried wallpaper"), bytes);
-    }
-
-    #[test]
-    fn does_not_fall_back_when_local_app_data_is_unavailable() {
-        let error = wallpaper_directory_from_local_app_data(None)
-            .expect_err("wallpapers require LOCALAPPDATA");
-        assert_eq!(error.code, "background_local_app_data_unavailable");
-    }
-
-    #[test]
-    fn strict_wallpaper_root_uses_the_current_local_app_data_without_mutating_environment() {
-        let current_local_app_data =
-            std::env::var_os("LOCALAPPDATA").filter(|value| !value.is_empty());
-
-        match (current_local_app_data, strict_wallpaper_root()) {
-            (Some(local_app_data), Ok(root)) => {
-                assert_eq!(
-                    root,
-                    PathBuf::from(local_app_data)
-                        .join("CodeSkin")
-                        .join("wallpapers")
-                );
-            }
-            (None, Err(error)) => assert_eq!(error.code, "background_local_app_data_unavailable"),
-            (Some(_), Err(error)) => panic!("LOCALAPPDATA was available: {error:?}"),
-            (None, Ok(root)) => panic!("missing LOCALAPPDATA unexpectedly produced {root:?}"),
-        }
-    }
-
-    #[test]
-    fn builds_unique_generated_names_for_same_timestamp_and_format() {
-        let root = PathBuf::from("C:/LocalAppData/CodeSkin/wallpapers");
-        let first = wallpaper_output_path(&root, 42, ImageFormat::WebP, 0x1111, 0);
-        let second = wallpaper_output_path(&root, 42, ImageFormat::WebP, 0x2222, 0);
-
-        assert_ne!(first, second);
-        assert_eq!(first, root.join("wallpaper-42-0000000000001111.webp"));
-        assert_eq!(second, root.join("wallpaper-42-0000000000002222.webp"));
-    }
-
-    #[test]
-    fn builds_the_strict_wallpaper_directory_from_local_app_data() {
-        assert_eq!(
-            wallpaper_directory_from_local_app_data(Some(OsString::from("C:/LocalAppData")))
-                .expect("derive strict wallpaper directory"),
-            Path::new("C:/LocalAppData")
-                .join("CodeSkin")
-                .join("wallpapers")
+            cropped.width() * DISPLAY_HEIGHT,
+            cropped.height() * DISPLAY_WIDTH
         );
     }
 }

@@ -147,12 +147,32 @@ const theme = {
   id: "tokyo-night",
   colors: {
     accent: "#7AA2F7",
+    secondary: "#BB9AF7",
     background: "#1A1B26",
     surface: "#24283B",
     foreground: "#C0CAF5",
     muted: "#565F89"
   },
-  layers: {}
+  backgroundImage: "data:image/jpeg;base64,/9j/2Q==",
+  layers: {},
+  contrast: {
+    sidebar: {
+      foreground: "#F4F7FF", muted: "#C7D0DC", panelColor: "#12161D",
+      panelOpacity: 0.37, blurPx: 14, textShadow: "0 1px 2px rgba(0,0,0,0.4)"
+    },
+    content: {
+      foreground: "#172033", muted: "#536174", panelColor: "#F7F4EE",
+      panelOpacity: 0.18, blurPx: 8, textShadow: "0 1px 2px rgba(255,255,255,0.4)"
+    },
+    infoPanel: {
+      foreground: "#F4F7FF", muted: "#C7D0DC", panelColor: "#12161D",
+      panelOpacity: 0.39, blurPx: 15, textShadow: "0 1px 2px rgba(0,0,0,0.4)"
+    },
+    composer: {
+      foreground: "#F4F7FF", muted: "#C7D0DC", panelColor: "#12161D",
+      panelOpacity: 0.33, blurPx: 13, textShadow: "0 1px 2px rgba(0,0,0,0.4)"
+    }
+  }
 };
 
 const pendingRuntimeWithNoRootIsRemovedBeforeDOMContentLoaded = () => {
@@ -314,6 +334,119 @@ const verifyFailsClosedWhenObserverGlobalDoesNotMatchRuntime = () => {
   assert.equal(verification.safe, false);
 };
 
+
+const cssRule = (css, selector) => {
+  const start = css.indexOf(`${selector} {`);
+  assert.notEqual(start, -1, `expected injected rule for ${selector}`);
+  const end = css.indexOf("\n}", start);
+  assert.notEqual(end, -1, `expected closing brace for ${selector}`);
+  return css.slice(start, end + 2);
+};
+
+const injectedSurfaceKeepsWallpaperSharpAndOnlyComposerGlass = () => {
+  const { document, context } = createLiveContext();
+  const install = run(`(${installSource})`, context);
+
+  assert.equal(install(theme).active, true);
+  const css = document.getElementById("codeskin-runtime-style").textContent;
+  const mainSurfaceRule = cssRule(css, ":root[data-codeskin-theme-id] .main-surface");
+  const headerRule = cssRule(css, ":root[data-codeskin-theme-id] .app-header-tint");
+  const sidebarRule = cssRule(css, ":root[data-codeskin-theme-id] .app-shell-left-panel");
+  const composerRule = cssRule(css, ":root[data-codeskin-theme-id] .composer-surface-chrome");
+
+  assert.match(css, /--codeskin-secondary: #BB9AF7;/);
+  assert.match(mainSurfaceRule, /background: transparent !important;/);
+  assert.match(mainSurfaceRule, /backdrop-filter: none !important;/);
+  assert.doesNotMatch(mainSurfaceRule, /backdrop-filter: blur/);
+  assert.match(css, /--codeskin-sidebar-foreground: #F4F7FF;/);
+  assert.match(css, /--codeskin-content-foreground: #172033;/);
+  assert.match(css, /--codeskin-info-foreground: #F4F7FF;/);
+  assert.match(css, /text-shadow: var\(--codeskin-sidebar-text-shadow\) !important;/);
+  assert.match(css, /text-shadow: var\(--codeskin-content-text-shadow\) !important;/);
+  assert.match(css, /text-shadow: var\(--codeskin-info-text-shadow\) !important;/);
+
+  assert.match(composerRule, /backdrop-filter: blur\(var\(--codeskin-composer-blur\)\) saturate\(112%\);/);
+  assert.match(composerRule, /background-color: color-mix/);
+  assert.match(composerRule, /box-shadow:/);
+  for (const rule of [headerRule, sidebarRule]) {
+    assert.match(rule, /background: transparent !important;/);
+    assert.doesNotMatch(rule, /(?:background-color:|border(?:-color)?:|backdrop-filter: blur|box-shadow:)/);
+  }
+  assert.match(
+    css,
+    /\[class\*="_markdownContent_"\][\s\S]*?background: transparent !important;/,
+    "chat and code wrappers must be explicitly transparent rather than inheriting an opaque Codex surface"
+  );
+  assert.match(
+    css,
+    /\[class\*="bg-token-foreground\/5"\][\s\S]*?background: transparent !important;/,
+    "environment information must be explicitly transparent rather than a glass card"
+  );
+  assert.doesNotMatch(css, /--codeskin-(?:sidebar|content|info)-panel-(?:color|opacity)/);
+  assert.doesNotMatch(css, /--codeskin-(?:sidebar|content|info)-blur/);
+  assert.doesNotMatch(css, /\[role="dialog"\]|\[role="listbox"\]/);
+  assert.doesNotMatch(css, /:root\[data-codeskin-theme-id\] button,/);
+};
+
+const textRegionsUsePerImageContrastWithoutGlassPanels = () => {
+  const { document, context } = createLiveContext();
+  const install = run(`(${installSource})`, context);
+
+  assert.equal(install(theme).active, true);
+  const css = document.getElementById("codeskin-runtime-style").textContent;
+
+  assert.match(css, /\.app-shell-left-panel :is\([\s\S]*?color: var\(--codeskin-sidebar-foreground\) !important;/);
+  assert.match(css, /\.main-surface :is\([\s\S]*?color: var\(--codeskin-content-foreground\) !important;/);
+  assert.match(css, /\[class\*="bg-token-foreground\/5"\] :is\([\s\S]*?color: var\(--codeskin-info-foreground\) !important;/);
+  assert.doesNotMatch(css, /--codeskin-(?:sidebar|content|info)-panel-(?:color|opacity)/);
+  assert.doesNotMatch(css, /--codeskin-(?:sidebar|content|info)-blur/);
+};
+
+const environmentInfoAndTopMenusUseContrastWithoutChangingTheirSurfaces = () => {
+  const { document, context } = createLiveContext();
+  const install = run(`(${installSource})`, context);
+
+  assert.equal(install(theme).active, true);
+  const css = document.getElementById("codeskin-runtime-style").textContent;
+  const environmentRule = cssRule(
+    css,
+    ':root[data-codeskin-theme-id] [class*="bg-token-dropdown-background"]:has([class~="group/summary-panel-item"])'
+  );
+  const toolbarRule = cssRule(
+    css,
+    ':root[data-codeskin-theme-id] button.no-drag[aria-haspopup="menu"][class*="text-token-text-tertiary"]'
+  );
+  const menuRule = cssRule(css, ':root[data-codeskin-theme-id] [role="menu"]');
+
+  // The user-facing "审阅 / 终端 / 浏览器 / 文件 / 侧边任务" entries live in
+  // .main-surface and are covered by its native token-text rule, rather than by
+  // the top-level trigger selector above.
+  assert.match(
+    css,
+    /:root\[data-codeskin-theme-id\] \.main-surface :is\([\s\S]*?\[class\*="text-token-text-primary"\][\s\S]*?color: var\(--codeskin-content-foreground\) !important;/
+  );
+
+  assert.match(environmentRule, /color: var\(--codeskin-info-foreground\) !important;/);
+  assert.match(environmentRule, /text-shadow: var\(--codeskin-info-text-shadow\) !important;/);
+  assert.doesNotMatch(environmentRule, /(?:background(?:-color)?:|border(?:-color)?:|backdrop-filter|box-shadow:)/);
+
+  assert.match(toolbarRule, /color: var\(--codeskin-content-foreground\) !important;/);
+  assert.match(toolbarRule, /text-shadow: var\(--codeskin-content-text-shadow\) !important;/);
+  assert.doesNotMatch(toolbarRule, /(?:background(?:-color)?:|border(?:-color)?:|backdrop-filter|box-shadow:)/);
+
+  assert.match(menuRule, /color: var\(--codeskin-content-foreground\) !important;/);
+  assert.match(menuRule, /text-shadow: var\(--codeskin-content-text-shadow\) !important;/);
+  assert.doesNotMatch(menuRule, /(?:background(?:-color)?:|border(?:-color)?:|backdrop-filter|box-shadow:)/);
+
+  const observerOptions = context.window.__codeskinRuntime.observer.observed[0].options;
+  assert.equal(observerOptions.childList, true);
+  assert.equal(observerOptions.subtree, true);
+  assert.equal(observerOptions.attributes, true);
+  assert.ok(observerOptions.attributeFilter.includes("class"));
+  assert.ok(observerOptions.attributeFilter.includes("aria-expanded"));
+  assert.ok(observerOptions.attributeFilter.includes("data-state"));
+};
+
 pendingRuntimeWithNoRootIsRemovedBeforeDOMContentLoaded();
 foreignPendingRuntimeIsNotRemoved();
 installExposesObserverAndRestoreRemovesIt();
@@ -321,4 +454,7 @@ foreignObserverRemainsAndInstallFailsClosed();
 repeatInstallReplacesOnlyItsOwnObserver();
 restoreDoesNotDeleteOrDisconnectAForeignObserver();
 verifyFailsClosedWhenObserverGlobalDoesNotMatchRuntime();
+injectedSurfaceKeepsWallpaperSharpAndOnlyComposerGlass();
+textRegionsUsePerImageContrastWithoutGlassPanels();
+environmentInfoAndTopMenusUseContrastWithoutChangingTheirSurfaces();
 console.log("injection runtime behavior tests passed");

@@ -7,6 +7,7 @@
   const wallpaperId = "codeskin-wallpaper-layer";
   const ownerAttribute = "data-codeskin-theme-id";
   const modeAttribute = "data-codeskin-mode";
+  const colorSchemeAttribute = "data-codeskin-color-scheme";
   const ownedAttribute = "data-codeskin-owned";
   const layerAttribute = "data-codeskin-layer";
   const runtimeAttribute = "data-codeskin-runtime";
@@ -56,20 +57,32 @@
   const safe = Boolean(runtimeIsOwned && observerGlobalMatchesRuntime);
   const wallpaperLayer = runtimeIsOwned && runtime.wallpaper.isConnected;
   const styleLayer = runtimeIsOwned && runtime.style.isConnected;
+  const wallpaperImage = runtimeIsOwned ? runtime.wallpaper.style.backgroundImage : "";
+  const wallpaperConfigured = typeof wallpaperImage === "string"
+    && /^url\("data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}"\)$/.test(wallpaperImage);
   const themeId = runtimeIsOwned ? root?.getAttribute(ownerAttribute) || null : null;
   const mode = runtimeIsOwned ? root?.getAttribute(modeAttribute) || null : null;
   const accent = runtimeIsOwned && root
     ? getComputedStyle(root).getPropertyValue("--codeskin-accent").trim()
     : "";
+  const secondary = runtimeIsOwned && root
+    ? getComputedStyle(root).getPropertyValue("--codeskin-secondary").trim()
+    : "";
+  const colorScheme = runtimeIsOwned ? root?.getAttribute(colorSchemeAttribute) || null : null;
   const validThemeId = typeof themeId === "string" && /^[A-Za-z0-9]+(?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(themeId);
   const validMode = mode === "ambient" || mode === "focus";
+  const validSecondary = /^#[0-9A-Fa-f]{6}$/.test(secondary);
+  const validColorScheme = colorScheme === "light" || colorScheme === "dark";
 
   return {
-    active: Boolean(safe && wallpaperLayer && styleLayer && validThemeId && validMode),
+    active: Boolean(safe && wallpaperLayer && styleLayer && wallpaperConfigured && validThemeId && validMode && validSecondary && validColorScheme),
     safe,
     themeId,
     accent,
+    secondary,
+    colorScheme,
     wallpaperLayer: Boolean(wallpaperLayer),
+    wallpaperConfigured: Boolean(wallpaperConfigured),
     styleLayer: Boolean(styleLayer),
     mode
   };

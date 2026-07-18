@@ -1,20 +1,20 @@
-import { useEffect, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useRef, useState } from "react";
 import {
-  applyTheme,
+  applyBackground,
   connectOrStartCodex,
-  importWallpaperTheme,
+  deleteBackground,
+  importBackground,
   inspectCodexStatus,
-  loadThemeLibrary,
-  renameTheme,
-  restoreTheme,
-  verifyTheme,
+  loadBackgroundLibrary,
+  restoreOriginalAppearance,
+  verifyInjection,
 } from "./api";
 import type {
+  Background,
+  BackgroundLibrary,
   CodexConnectionState,
   CodexStatus,
   CommandError,
-  Theme,
-  ThemeLibrary,
   VerifyResult,
 } from "./types";
 import "./App.css";
@@ -29,7 +29,7 @@ const initialStatus: CodexStatus = {
 const stateLabel: Record<CodexConnectionState, string> = {
   notRunning: "未运行",
   runningWithoutDebugPort: "已运行，未开启 CDP",
-  debugPortDetected: "本地 CDP 已发现",
+  debugPortDetected: "已发现本地 CDP",
   starting: "正在启动",
   connecting: "正在连接",
   connected: "已连接",
@@ -60,88 +60,26 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "发生未知错误。";
 }
 
-function normalizeLibrary(library: ThemeLibrary): ThemeLibrary {
-  const hasSelectedTheme = library.themes.some(
-    (theme) => theme.id === library.selectedThemeId,
-  );
-  return hasSelectedTheme
-    ? library
-    : { ...library, selectedThemeId: library.themes[0]?.id ?? null };
-}
-
-function percent(value: number): string {
-  return `${Math.round(value * 100)}%`;
-}
-
-function ThemePreview({ theme }: { theme: Theme }) {
-  if (theme.source === "wallpaper" && theme.backgroundImage) {
-    return (
-      <div className="theme-preview wallpaper-preview">
-        <img src={theme.backgroundImage} alt={`${theme.name} 壁纸缩略图`} />
-        <span className="source-badge">WALLPAPER</span>
-      </div>
-    );
+function describeVerification(result: VerifyResult): string {
+  const count = result.targets.length;
+  if (result.active) {
+    return `背景注入已生效：${count} 个 Codex 渲染页面已校验。`;
   }
-
-  return (
-    <div
-      className="theme-preview builtin-preview"
-      style={{
-        background: theme.colors.background,
-        color: theme.colors.foreground,
-        borderColor: theme.colors.accent,
-      }}
-    >
-      <span className="preview-rail" style={{ background: theme.colors.surface }} />
-      <span className="preview-line line-one" style={{ background: theme.colors.accent }} />
-      <span className="preview-line line-two" style={{ background: theme.colors.muted }} />
-      <span className="preview-chip" style={{ background: theme.colors.accent }} />
-    </div>
-  );
-}
-
-function ColorSwatches({ theme }: { theme: Theme }) {
-  const swatches = [
-    ["背景", theme.colors.background],
-    ["表面", theme.colors.surface],
-    ["强调", theme.colors.accent],
-    ["文字", theme.colors.foreground],
-  ] as const;
-
-  return (
-    <div className="color-swatches" aria-label={`${theme.name} 配色`}>
-      {swatches.map(([label, color]) => (
-        <span
-          className="color-swatch"
-          key={label}
-          style={{ backgroundColor: color }}
-          title={`${label}: ${color}`}
-        />
-      ))}
-    </div>
-  );
+  return count
+    ? "已连接到 Codex，但没有检测到完整的背景注入层。"
+    : "未发现可校验的 Codex 渲染页面。";
 }
 
 function App() {
-  const [library, setLibrary] = useState<ThemeLibrary | null>(null);
+  const [library, setLibrary] = useState<BackgroundLibrary | null>(null);
   const [status, setStatus] = useState<CodexStatus>(initialStatus);
   const [verification, setVerification] = useState<VerifyResult | null>(null);
-  const [themeName, setThemeName] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const fileInput = useRef<HTMLInputElement>(null);
 
-  const selectedTheme = useMemo(
-    () =>
-      library?.themes.find((theme) => theme.id === library.selectedThemeId) ??
-      null,
-    [library],
-  );
   const isBusy = busy !== null;
-
-  useEffect(() => {
-    setThemeName(selectedTheme?.source === "wallpaper" ? selectedTheme.name : "");
-  }, [selectedTheme]);
 
   useEffect(() => {
     void initialize();
@@ -152,10 +90,10 @@ function App() {
     setError("");
     try {
       const [nextLibrary, codexStatus] = await Promise.all([
-        loadThemeLibrary(),
+        loadBackgroundLibrary(),
         inspectCodexStatus(),
       ]);
-      setLibrary(normalizeLibrary(nextLibrary));
+      setLibrary(nextLibrary);
       setStatus(codexStatus);
     } catch (cause) {
       setError(`初始化失败：${errorMessage(cause)}`);
@@ -176,47 +114,91 @@ function App() {
     }
   }
 
-  function selectTheme(themeId: string) {
-    setLibrary((current) =>
-      current ? { ...current, selectedThemeId: themeId } : current,
-    );
-    setVerification(null);
-    setNotice("");
-  }
-
-  async function connect() {
+  async function connectCodex() {
     setBusy("connect");
     setError("");
     setNotice("");
     try {
       const nextStatus = await connectOrStartCodex();
       setStatus(nextStatus);
-      setNotice(nextStatus.detail);
+      setNotice(
+        nextStatus.port
+          ? `Codex 已连接到本机 127.0.0.1:${nextStatus.port}。`
+          : nextStatus.detail,
+      );
     } catch (cause) {
+      await refreshStatus();
       setError(errorMessage(cause));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function apply(background: Background) {
+    setBusy(`apply:${background.id}`);
+    setError("");
+    setNotice("");
+    try {
+      const result = await applyBackground(background.id);
+      setVerification(result);
+      setLibrary((current) =>
+        current ? { ...current, selectedBackgroundId: background.id } : current,
+      );
+      setStatus(await inspectCodexStatus());
+      setNotice(`“${background.name}”已应用。${describeVerification(result)}`);
+    } catch (cause) {
+      setError(`无法应用背景：${errorMessage(cause)}`);
       await refreshStatus();
     } finally {
       setBusy(null);
     }
   }
 
-  async function applySelectedTheme() {
-    if (!selectedTheme) return;
-    setBusy("apply");
+  async function uploadFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    setBusy("upload");
     setError("");
     setNotice("");
     try {
-      const result = await applyTheme(selectedTheme.id);
-      setVerification(result);
-      setStatus(await inspectCodexStatus());
+      const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
+      const nextLibrary = await importBackground(bytes, file.name);
+      setLibrary(nextLibrary);
+      setNotice(`已保存“${file.name}”。点击它的缩略图即可应用到 Codex。`);
+    } catch (cause) {
+      setError(`导入失败：${errorMessage(cause)}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function remove(background: Background) {
+    if (
+      !window.confirm(
+        background.id === library?.selectedBackgroundId
+          ? `删除“${background.name}”会先恢复 Codex 原始外观，确定继续吗？`
+          : `确定删除“${background.name}”吗？`,
+      )
+    ) {
+      return;
+    }
+
+    setBusy(`delete:${background.id}`);
+    setError("");
+    setNotice("");
+    try {
+      const nextLibrary = await deleteBackground(background.id);
+      setLibrary(nextLibrary);
+      setVerification(null);
       setNotice(
-        result.active
-          ? `“${selectedTheme.name}”已注入到 ${result.targets.length} 个页面 target。`
-          : "注入请求已完成，但校验未通过；请查看 target 详情。",
+        background.id === library?.selectedBackgroundId
+          ? "已恢复 Codex 原始外观，并删除这张背景图。"
+          : "背景图已删除。",
       );
     } catch (cause) {
-      setError(errorMessage(cause));
-      await refreshStatus();
+      setError(`删除失败：${errorMessage(cause)}`);
     } finally {
       setBusy(null);
     }
@@ -225,16 +207,13 @@ function App() {
   async function verify() {
     setBusy("verify");
     setError("");
+    setNotice("");
     try {
-      const result = await verifyTheme();
+      const result = await verifyInjection();
       setVerification(result);
-      setNotice(
-        result.active
-          ? `校验通过：${result.targets.length} 个已登记页面仍保留 CodeSkin 标记。`
-          : "校验未通过或目前没有已登记的页面 target。",
-      );
+      setNotice(describeVerification(result));
     } catch (cause) {
-      setError(errorMessage(cause));
+      setError(`校验失败：${errorMessage(cause)}`);
     } finally {
       setBusy(null);
     }
@@ -243,51 +222,16 @@ function App() {
   async function restore() {
     setBusy("restore");
     setError("");
+    setNotice("");
     try {
-      const result = await restoreTheme();
+      const result = await restoreOriginalAppearance();
       setVerification(result);
-      setNotice("已请求移除当前页面和后续新文档中的 CodeSkin 注入。");
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function importTheme(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file) return;
-
-    setBusy("import");
-    setError("");
-    setNotice("");
-    try {
-      const bytes = await file.arrayBuffer();
-      const nextLibrary = await importWallpaperTheme(
-        Array.from(new Uint8Array(bytes)),
-        file.name,
+      setLibrary((current) =>
+        current ? { ...current, selectedBackgroundId: null } : current,
       );
-      setLibrary(normalizeLibrary(nextLibrary));
-      setNotice(`已从“${file.name}”生成并选择新的壁纸主题。`);
+      setNotice("已清除 CodeSkin 注入层，Codex 已恢复原始外观。");
     } catch (cause) {
-      setError(`壁纸主题导入失败：${errorMessage(cause)}`);
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function saveThemeName() {
-    if (!selectedTheme || selectedTheme.source !== "wallpaper") return;
-    setBusy("rename");
-    setError("");
-    setNotice("");
-    try {
-      const nextLibrary = await renameTheme(selectedTheme.id, themeName);
-      setLibrary(normalizeLibrary(nextLibrary));
-      setNotice("壁纸主题名称已保存。");
-    } catch (cause) {
-      setError(`保存主题名称失败：${errorMessage(cause)}`);
+      setError(`恢复失败：${errorMessage(cause)}`);
     } finally {
       setBusy(null);
     }
@@ -297,180 +241,168 @@ function App() {
     <main className="app-shell">
       <header className="hero">
         <div>
-          <p className="eyebrow">RUNTIME THEME LAYER</p>
-          <h1>CodeSkin</h1>
-          <p className="subtle">
-            通过严格限定在 <code>127.0.0.1</code> 的本地 CDP，对运行中的 Codex
-            渲染页施加临时视觉层；不会修改 Codex 安装文件、<code>app.asar</code> 或签名。
+          <p className="eyebrow">CodeSkin · 非官方本地工具</p>
+          <h1>我的 Codex 背景</h1>
+          <p className="hero-copy">
+            上传一张图片，点击缩略图即可作为 Codex 桌面版的背景。所有连接仅使用本机
+            127.0.0.1 CDP，不修改 Codex 的安装文件。
           </p>
         </div>
-        <div className={`connection-badge state-${status.state}`}>
-          <span className="status-dot" aria-hidden="true" />
-          <div>
+        <div className={`connection-card state-${status.state}`}>
+          <div className="connection-title">
+            <span className="status-dot" aria-hidden="true" />
             <strong>{stateLabel[status.state]}</strong>
-            <span>{status.port ? `127.0.0.1:${status.port}` : "尚无调试端口"}</span>
+          </div>
+          <p>{status.detail}</p>
+          {status.port && <code>127.0.0.1:{status.port}</code>}
+          <div className="connection-actions">
+            <button className="button button-secondary" onClick={() => void refreshStatus()} disabled={isBusy}>
+              刷新状态
+            </button>
+            <button className="button button-primary" onClick={() => void connectCodex()} disabled={isBusy}>
+              {busy === "connect" ? "正在连接…" : "连接 / 启动 Codex"}
+            </button>
           </div>
         </div>
       </header>
 
-      <section className="panel connection-panel" aria-labelledby="connection-title">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">CODEX CONNECTION</p>
-            <h2 id="connection-title">连接与启动</h2>
-          </div>
-          <div className="button-row">
-            <button className="button secondary" type="button" onClick={() => void refreshStatus()} disabled={isBusy}>
-              刷新状态
-            </button>
-            <button className="button primary" type="button" onClick={() => void connect()} disabled={isBusy}>
-              {busy === "connect" ? "处理中…" : "连接或启动 Codex"}
-            </button>
-            <button className="button ghost" type="button" onClick={() => void verify()} disabled={isBusy}>
-              {busy === "verify" ? "校验中…" : "校验注入"}
-            </button>
-          </div>
-        </div>
-        <p className="status-detail">{status.detail}</p>
-        {status.state === "runningWithoutDebugPort" ? (
-          <p className="warning-text">当前 Codex 已运行但未开放调试端口。请先退出它，再由 CodeSkin 启动；不会强制关闭现有进程。</p>
-        ) : null}
-      </section>
+      {status.state === "runningWithoutDebugPort" && (
+        <section className="warning-panel">
+          <strong>当前 Codex 是未开启 CDP 的实例。</strong>
+          请通过 Codex 自己的菜单或托盘正常退出，等待它完全退出后，再点击“连接 / 启动 Codex”。
+          CodeSkin 不会强制结束你的 Codex 进程。
+        </section>
+      )}
 
-      <section className="panel" aria-labelledby="themes-title">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">THEME LIBRARY {library ? `V${library.version}` : ""}</p>
-            <h2 id="themes-title">主题库</h2>
-            <p className="subtle compact">选择主题后应用；壁纸仅保存在 CodeSkin 本地数据目录，不会上传。</p>
-          </div>
-          <div className="button-row">
-            <label className={`button secondary file-button ${isBusy ? "disabled" : ""}`}>
-              {busy === "import" ? "生成中…" : "导入壁纸并生成主题"}
-              <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void importTheme(event)} disabled={isBusy} />
-            </label>
-            <button className="button primary" type="button" onClick={() => void applySelectedTheme()} disabled={!selectedTheme || isBusy}>
-              {busy === "apply" ? "应用中…" : "应用所选主题"}
-            </button>
-          </div>
-        </div>
+      {error && <section className="message error-message">{error}</section>}
+      {notice && <section className="message notice-message">{notice}</section>}
 
-        {library?.themes.length ? (
-          <div className="theme-grid" aria-label="主题列表">
-            {library.themes.map((theme) => (
-              <button
-                className={`theme-card ${selectedTheme?.id === theme.id ? "selected" : ""}`}
-                key={theme.id}
-                onClick={() => selectTheme(theme.id)}
-                type="button"
-                aria-pressed={selectedTheme?.id === theme.id}
-                disabled={isBusy}
-              >
-                <ThemePreview theme={theme} />
-                <div className="theme-card-copy">
-                  <div className="theme-card-title">
-                    <strong>{theme.name}</strong>
-                    {theme.source === "wallpaper" ? <span className="source-label">壁纸</span> : null}
-                  </div>
-                  <span>{theme.description}</span>
-                  <ColorSwatches theme={theme} />
-                </div>
-              </button>
-            ))}
-          </div>
-        ) : (
-          <p className="subtle empty-state">主题库目前没有可用主题。</p>
-        )}
-
-        {selectedTheme ? (
-          <div className="selected-theme-details" aria-live="polite">
-            <div>
-              <p className="eyebrow">SELECTED THEME</p>
-              <h3>{selectedTheme.name}</h3>
-              <p className="subtle compact">{selectedTheme.description}</p>
-            </div>
-            <dl className="layer-list">
-              <div><dt>Ambient overlay</dt><dd>{percent(selectedTheme.layers.ambientOverlayOpacity)}</dd></div>
-              <div><dt>Focus overlay</dt><dd>{percent(selectedTheme.layers.focusOverlayOpacity)}</dd></div>
-            </dl>
-          </div>
-        ) : null}
-
-        {selectedTheme?.source === "wallpaper" ? (
-          <form className="rename-form" onSubmit={(event) => { event.preventDefault(); void saveThemeName(); }}>
-            <label htmlFor="wallpaper-theme-name">壁纸主题名称</label>
-            <div className="rename-controls">
-              <input
-                id="wallpaper-theme-name"
-                type="text"
-                value={themeName}
-                onChange={(event) => setThemeName(event.target.value)}
-                disabled={isBusy}
-                required
-              />
-              <button className="button secondary" type="submit" disabled={isBusy || !themeName.trim()}>
-                {busy === "rename" ? "保存中…" : "保存名称"}
-              </button>
-            </div>
-          </form>
-        ) : null}
-      </section>
-
-      <section className="panel restore-panel" aria-label="恢复工具">
+      <section className="section-head">
         <div>
-          <p className="eyebrow">SAFE EXIT</p>
-          <h2>恢复原始外观</h2>
-          <p className="subtle compact">移除 CodeSkin 自己创建的 style 标记、主题属性和刷新时注入的脚本；不触碰 Codex 原有样式。</p>
+          <p className="eyebrow">背景图库</p>
+          <h2>上传的图片</h2>
+          <p>原图会保存在本机；CodeSkin 同时生成适合窗口显示的 2560 × 1440 JPEG。</p>
         </div>
-        <button className="button danger" type="button" onClick={() => void restore()} disabled={isBusy}>
-          {busy === "restore" ? "恢复中…" : "恢复 Codex 原始外观"}
-        </button>
+        <div className="section-actions">
+          <input
+            ref={fileInput}
+            className="visually-hidden"
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            onChange={(event) => void uploadFile(event)}
+          />
+          <button
+            className="button button-primary"
+            disabled={isBusy}
+            onClick={() => fileInput.current?.click()}
+          >
+            {busy === "upload" ? "正在导入…" : "上传背景图片"}
+          </button>
+          <button className="button button-secondary" disabled={isBusy} onClick={() => void verify()}>
+            {busy === "verify" ? "正在校验…" : "校验注入"}
+          </button>
+          <button className="button button-danger" disabled={isBusy} onClick={() => void restore()}>
+            恢复官方外观
+          </button>
+        </div>
       </section>
 
-      {notice ? <p className="feedback success" role="status">{notice}</p> : null}
-      {error ? <p className="feedback error" role="alert">{error}</p> : null}
+      {library === null ? (
+        <section className="empty-state">正在加载本地背景图库…</section>
+      ) : library.backgrounds.length === 0 ? (
+        <section className="empty-state">
+          <div className="empty-art" aria-hidden="true">▧</div>
+          <h3>还没有背景图片</h3>
+          <p>上传一张 PNG、JPEG 或 WebP 图片。它不会修改 Codex 的官方安装包。</p>
+          <button className="button button-primary" disabled={isBusy} onClick={() => fileInput.current?.click()}>
+            选择图片
+          </button>
+        </section>
+      ) : (
+        <section className="background-grid" aria-label="上传的 Codex 背景">
+          {library.backgrounds.map((background) => {
+            const active = background.id === library.selectedBackgroundId;
+            const applying = busy === `apply:${background.id}`;
+            return (
+              <article
+                className={`background-card ${active ? "background-active" : ""}`}
+                key={background.id}
+              >
+                <button
+                  className="background-select"
+                  disabled={isBusy}
+                  onClick={() => void apply(background)}
+                  title={`应用 ${background.name}`}
+                >
+                  <div className="background-thumbnail">
+                    {background.previewDataUrl ? (
+                      <img
+                        src={background.previewDataUrl}
+                        alt={`${background.name} 背景预览`}
+                      />
+                    ) : (
+                      <div className="thumbnail-fallback">图片不可用</div>
+                    )}
+                    <span className="thumbnail-shade" />
+                    {active && <span className="active-badge">正在使用</span>}
+                    {applying && <span className="active-badge">正在应用…</span>}
+                  </div>
+                  <div className="background-meta">
+                    <strong>{background.name}</strong>
+                    <span>{active ? "点击可重新应用" : "点击立即应用"}</span>
+                  </div>
+                </button>
+                <button
+                  className="background-delete"
+                  aria-label={`删除 ${background.name}`}
+                  disabled={isBusy}
+                  onClick={() => void remove(background)}
+                  title="删除这张背景图片"
+                >
+                  删除
+                </button>
+              </article>
+            );
+          })}
+        </section>
+      )}
 
-      {verification ? (
-        <section className="panel verification" aria-labelledby="verification-title">
-          <div className="section-heading">
+      {verification && (
+        <section className="verify-panel">
+          <div className="verify-heading">
             <div>
-              <p className="eyebrow">VERIFY RESULT</p>
-              <h2 id="verification-title">{verification.active ? "注入校验通过" : "注入校验未通过"}</h2>
+              <p className="eyebrow">注入校验</p>
+              <h2>{verification.active ? "背景层正在运行" : "未检测到完整背景层"}</h2>
             </div>
-            <span className={`verification-chip ${verification.active ? "active" : "inactive"}`}>
-              {verification.active ? "ACTIVE" : "INACTIVE"}
+            <span className={`result-pill ${verification.active ? "result-ok" : "result-warn"}`}>
+              {verification.active ? "已生效" : "需要检查"}
             </span>
           </div>
-          {verification.targets.length === 0 ? (
-            <p className="subtle compact">当前没有可校验的、由 CodeSkin 登记的页面 target。</p>
-          ) : (
-            <ul className="target-list">
+          {verification.targets.length ? (
+            <div className="target-list">
               {verification.targets.map((target) => (
-                <li key={target.targetId}>
-                  <span className={`target-dot ${target.active ? "active" : "inactive"}`} aria-hidden="true" />
+                <div className="target-row" key={target.targetId}>
+                  <span className={`target-dot ${target.active ? "target-ok" : ""}`} />
                   <div>
-                    <strong>{target.active ? "已检测到主题标记" : "未检测到主题标记"}</strong>
-                    <code>{target.targetUrl || "about:blank"}</code>
-                    <div className="target-layers" aria-label="页面图层状态">
-                      <span className={target.wallpaperLayer ? "active" : "inactive"}>wallpaper {target.wallpaperLayer ? "on" : "off"}</span>
-                      <span className={target.styleLayer ? "active" : "inactive"}>style {target.styleLayer ? "on" : "off"}</span>
-                      <span className="mode-chip">mode {target.mode ?? "unknown"}</span>
-                    </div>
+                    <strong>{target.active ? "背景图、样式层均已生效" : "此页面未完整生效"}</strong>
                     <p>{target.detail}</p>
+                    <small>{target.targetUrl}</small>
                   </div>
-                </li>
+                  <span className="target-mode">{target.mode ?? "未知页面"}</span>
+                </div>
               ))}
-            </ul>
+            </div>
+          ) : (
+            <p className="verify-empty">暂无可校验的 Codex 渲染页面。</p>
           )}
         </section>
-      ) : null}
+      )}
 
-      <section className="notice" role="note">
-        <strong>非官方工具。</strong> CodeSkin 不隶属于、也未获 OpenAI 或 Codex 官方支持。它只做运行时视觉层修改；Codex 更新可能改变 DOM，届时请先使用“校验注入”，必要时恢复原始外观。
-      </section>
+      <footer>
+        CodeSkin 是非官方视觉定制工具。它仅在运行时向本机 Codex 渲染进程注入背景层；退出或恢复后不会改动 Codex 官方文件。
+      </footer>
     </main>
   );
 }
 
 export default App;
-

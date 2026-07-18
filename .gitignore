@@ -59,3 +59,7 @@ Thumbs.db
 *.sw?
 *.tmp
 *.bak
+
+# Local verification and manual build artifacts
+/CodeSkin-loopback-only.exe
+/src-tauri/artifacts/

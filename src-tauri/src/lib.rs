@@ -15,16 +15,11 @@ pub fn run() {
     tauri::Builder::default()
         .manage(app_state::AppState::new())
         .setup(|app| {
-            tray::build(app)?;
-
-            // Windows may keep the currently active application in the foreground when
-            // CodeSkin is launched externally. Ensure the first-run window is visible
-            // and asks for focus; later close requests still minimize to the tray.
+            tray::build(app.handle())?;
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
-
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -35,13 +30,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::inspect_codex_status,
-            commands::load_theme_library,
+            commands::load_background_library,
             commands::connect_or_start_codex,
-            commands::apply_theme,
-            commands::import_wallpaper_theme,
-            commands::rename_theme,
-            commands::verify_theme,
-            commands::restore_theme
+            commands::apply_background,
+            commands::import_background,
+            commands::delete_background,
+            commands::verify_injection,
+            commands::restore_original_appearance
         ])
         .run(tauri::generate_context!())
         .expect("error while running CodeSkin");

@@ -1,34 +1,16 @@
-export type ThemeColors = {
-  accent: string;
-  background: string;
-  surface: string;
-  foreground: string;
-  muted: string;
-};
-
-export type ThemeSource = "builtin" | "wallpaper";
-
-export type ThemeLayers = {
-  ambientOverlayOpacity: number;
-  focusOverlayOpacity: number;
-  sidebarOpacity: number;
-  cardOpacity: number;
-};
-
-export type Theme = {
+export type Background = {
   id: string;
   name: string;
   description: string;
-  colors: ThemeColors;
-  source: ThemeSource;
-  layers: ThemeLayers;
   backgroundImage: string | null;
+  sourceImage: string | null;
+  previewDataUrl: string | null;
 };
 
-export type ThemeLibrary = {
+export type BackgroundLibrary = {
   version: number;
-  selectedThemeId: string | null;
-  themes: Theme[];
+  selectedBackgroundId: string | null;
+  backgrounds: Background[];
 };
 
 export type CodexConnectionState =
@@ -54,6 +36,7 @@ export type TargetVerification = {
   active: boolean;
   detail: string;
   wallpaperLayer: boolean;
+  wallpaperConfigured: boolean;
   styleLayer: boolean;
   mode: string | null;
 };
@@ -68,4 +51,3 @@ export type CommandError = {
   code: string;
   message: string;
 };
-

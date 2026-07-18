@@ -111,10 +111,6 @@ impl AppState {
         self.verify_theme().await
     }
 
-    pub async fn remember_active_theme(&self, theme: Theme) {
-        self.runtime.lock().await.active_theme = Some(theme);
-    }
-
     pub async fn verify_theme(&self) -> Result<VerifyResult, CommandError> {
         let (theme_id, targets) = {
             let runtime = self.runtime.lock().await;
@@ -411,9 +407,7 @@ impl AppState {
         let event_receiver = client.subscribe_events();
         cdp_result(client.call("Page.enable", json!({})).await?)?;
 
-        let expression = install_expression(&theme).map_err(|error| {
-            CommandError::new("theme_payload_serialize_failed", error.to_string())
-        })?;
+        let expression = install_expression(&theme)?;
         let add_script_response = cdp_result(
             client
                 .call(
@@ -519,7 +513,7 @@ impl AppState {
                 _ = sleep(Duration::from_millis(250)) => {}
             }
 
-            let expression = {
+            let theme = {
                 let runtime = self.runtime.lock().await;
                 let is_current_registration =
                     runtime
@@ -533,15 +527,21 @@ impl AppState {
                 if !is_current_registration {
                     return;
                 }
-                runtime
-                    .active_theme
-                    .as_ref()
-                    .and_then(|theme| install_expression(theme).ok())
+                runtime.active_theme.clone()
             };
-            let Some(expression) = expression else {
+            let Some(theme) = theme else {
                 // `apply_theme` registers the watcher before publishing the active theme.
                 // Keep the subscription alive across that small setup window; restore cancels it.
                 continue;
+            };
+            let expression = match install_expression(&theme) {
+                Ok(expression) => expression,
+                Err(error) => {
+                    eprintln!(
+                        "CodeSkin could not rebuild wallpaper injection for {target_id}: {error}"
+                    );
+                    continue;
+                }
             };
 
             let _ = client
@@ -659,6 +659,7 @@ mod live_cdp_tests {
             active,
             detail: "test".into(),
             wallpaper_layer,
+            wallpaper_configured: false,
             style_layer,
             mode: None,
         }
@@ -755,26 +756,6 @@ mod live_cdp_tests {
                     theme.source == crate::models::ThemeSource::Wallpaper
                         && theme.background_image.is_some()
                 })
-            })
-            .or_else(|| {
-                std::fs::read(app_data_dir.join("settings.json"))
-                    .ok()
-                    .and_then(|bytes| {
-                        serde_json::from_slice::<crate::storage::PersistedSettings>(&bytes).ok()
-                    })
-                    .and_then(|settings| settings.background_image)
-                    .map(|background_image| {
-                        let mut theme = crate::models::Theme::builtin()
-                            .into_iter()
-                            .find(|theme| theme.id == "paper-lantern")
-                            .expect("built-in fallback theme");
-                        theme.id = "live-existing-wallpaper".into();
-                        theme.name = "Live Existing Wallpaper".into();
-                        theme.description = "既有本地壁纸的 live CDP 验证主题。".into();
-                        theme.source = crate::models::ThemeSource::Wallpaper;
-                        theme.background_image = Some(background_image);
-                        theme
-                    })
             })
             .expect("live test requires an existing local CodeSkin wallpaper theme");
         assert_eq!(theme.source, crate::models::ThemeSource::Wallpaper);

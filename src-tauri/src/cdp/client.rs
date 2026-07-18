@@ -13,9 +13,31 @@ use tokio::{
     sync::{broadcast, mpsc, oneshot, Mutex},
     time::timeout,
 };
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{
+        client::IntoClientRequest,
+        http::{header::ORIGIN, HeaderValue, Request},
+        Message,
+    },
+};
 
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, CommandError>>>>>;
+
+fn local_cdp_handshake_request(
+    websocket_url: &str,
+    port: u16,
+) -> Result<Request<()>, CommandError> {
+    let websocket_url = validate_loopback_ws_url(websocket_url, port)?;
+    let mut request = websocket_url
+        .as_str()
+        .into_client_request()
+        .map_err(|error| CommandError::new("cdp_websocket_request_failed", error.to_string()))?;
+    let origin = HeaderValue::from_str(&format!("http://127.0.0.1:{port}"))
+        .map_err(|error| CommandError::new("cdp_websocket_request_failed", error.to_string()))?;
+    request.headers_mut().insert(ORIGIN, origin);
+    Ok(request)
+}
 
 #[derive(Clone, Debug)]
 pub struct CdpEvent {
@@ -45,12 +67,10 @@ pub struct CdpClient {
 
 impl CdpClient {
     pub async fn connect(websocket_url: &str, port: u16) -> Result<Self, CommandError> {
-        let websocket_url = validate_loopback_ws_url(websocket_url, port)?;
-        let (stream, _) = connect_async(websocket_url.as_str())
-            .await
-            .map_err(|error| {
-                CommandError::new("cdp_websocket_connect_failed", error.to_string())
-            })?;
+        let request = local_cdp_handshake_request(websocket_url, port)?;
+        let (stream, _) = connect_async(request).await.map_err(|error| {
+            CommandError::new("cdp_websocket_connect_failed", error.to_string())
+        })?;
         let (mut writer, mut reader) = stream.split();
         let (outbound, mut outbound_receiver) = mpsc::channel::<Message>(32);
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
@@ -159,7 +179,7 @@ async fn fail_pending(pending: &Pending, detail: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::CdpEvent;
+    use super::{local_cdp_handshake_request, CdpEvent};
     use serde_json::json;
 
     #[test]
@@ -177,5 +197,19 @@ mod tests {
     #[test]
     fn ignores_response_messages_when_parsing_events() {
         assert!(CdpEvent::from_wire(&json!({ "id": 7, "result": {} })).is_none());
+    }
+
+    #[test]
+    fn websocket_handshake_uses_the_exact_local_loopback_origin() {
+        let request = local_cdp_handshake_request("ws://127.0.0.1:43123/devtools/page/1", 43123)
+            .expect("valid local CDP handshake request");
+
+        assert_eq!(
+            request
+                .headers()
+                .get("origin")
+                .and_then(|value| value.to_str().ok()),
+            Some("http://127.0.0.1:43123")
+        );
     }
 }

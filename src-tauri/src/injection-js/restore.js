@@ -85,6 +85,7 @@
 
   root?.removeAttribute(ownerAttribute);
   root?.removeAttribute(modeAttribute);
+  root?.removeAttribute("data-codeskin-color-scheme");
   if (window[runtimeKey] === runtime) delete window[runtimeKey];
   return { active: false };
 })()

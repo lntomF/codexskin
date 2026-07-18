@@ -1,12 +1,9 @@
 mod backgrounds;
-#[allow(dead_code)]
 mod palette;
 mod themes;
 
-pub use backgrounds::import_background_bytes;
-#[allow(unused_imports)]
-pub use palette::{generate_wallpaper_theme, import_wallpaper_theme};
-#[allow(unused_imports)]
-pub use themes::{
-    load_settings, load_theme_library, save_settings, save_theme_library, PersistedSettings,
-};
+pub use backgrounds::delete_managed_background_files;
+pub(crate) use backgrounds::{read_managed_background_bytes, wallpaper_preview_data_url};
+pub use palette::import_wallpaper_theme;
+pub(crate) use palette::refresh_wallpaper_theme_visuals;
+pub use themes::{load_theme_library, save_theme_library};
