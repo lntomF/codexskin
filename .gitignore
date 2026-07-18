@@ -1,0 +1,61 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Dependencies and build outputs
+node_modules/
+dist/
+dist-ssr/
+build/
+coverage/
+.vite/
+.parcel-cache/
+.eslintcache
+*.tsbuildinfo
+.cache/
+out/
+*.local
+
+# Runtime, credentials, and local state
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.sqlite
+*.db
+*.sqlite3
+*.trace
+*.pid
+runtime-probe.json
+event-fallback-probe.ps1
+codeskin-window-capture*.png
+codeskin-window-capture*.jpg
+codeskin-window-capture*.webp
+
+# Tauri / app artifacts
+src-tauri/target/
+src-tauri/gen/
+src-tauri/.env
+src-tauri/.env.*
+
+# Editor and OS files
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.tmp
+*.bak

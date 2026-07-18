@@ -1,0 +1,1 @@
+pub const RECONNECT_INTERVAL_SECONDS: u64 = 2;
