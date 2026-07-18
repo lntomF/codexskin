@@ -38,20 +38,16 @@ pub(crate) fn diagnostic(message: impl Display) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let app_state = app_state::AppState::new();
+    let app_state_for_setup = std::sync::Arc::clone(&app_state);
     tauri::Builder::default()
-        .manage(app_state::AppState::new())
-        .setup(|app| {
-            match storage::load_theme_library() {
-                Ok(library) => diagnostic(format_args!(
-                    "[startup] persisted path={} selectedThemeId={:?} backgrounds={} (diagnostic read only; runtime active_theme remains None)",
-                    storage::theme_library_path()?.display(),
-                    library.selected_theme_id,
-                    library.themes.len()
-                )),
-                Err(error) => diagnostic(format_args!("[startup] persisted theme read failed: {error}")),
-            }
-            diagnostic("[startup] AppState created with active_theme=None; reconnect loop is not started during setup.");
+        .manage(app_state)
+        .setup(move |app| {
             tray::build(app.handle())?;
+            let recovery_state = std::sync::Arc::clone(&app_state_for_setup);
+            tauri::async_runtime::spawn(async move {
+                recovery_state.restore_persisted_theme_on_startup().await;
+            });
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.set_focus();

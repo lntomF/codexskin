@@ -64,14 +64,12 @@ pub(crate) async fn apply_saved_background_by_id(
         background.colors.secondary,
         background.colors.background
     ));
-    let result = state.apply_saved_theme(background).await?;
     library.selected_theme_id = Some(background_id.to_owned());
     diagnostic(format_args!(
-        "[save] persisting selected background after successful apply id={background_id}"
+        "[save] persisting selected background before CDP apply id={background_id}"
     ));
     storage::save_theme_library(&library)?;
-    state.start_reconnector();
-    Ok(result)
+    state.apply_saved_theme(background).await
 }
 
 #[tauri::command]
@@ -109,6 +107,9 @@ pub async fn delete_background(
 
     // Do not remove the active wallpaper until its CDP layers and new-document script are gone.
     if library.selected_theme_id.as_deref() == Some(background_id.as_str()) {
+        diagnostic(format_args!(
+            "[delete] deleting currently selected background id={background_id}; clearing persisted selection"
+        ));
         state.restore_theme().await?;
         library.selected_theme_id = None;
     }
@@ -149,6 +150,9 @@ pub async fn verify_injection(
 pub(crate) async fn restore_original_appearance_inner(
     state: &Arc<AppState>,
 ) -> Result<VerifyResult, CommandError> {
+    diagnostic(
+        "[restore] user requested original appearance; clearing persisted selected background",
+    );
     let result = state.restore_theme().await?;
     let mut library = storage::load_theme_library()?;
     library.selected_theme_id = None;

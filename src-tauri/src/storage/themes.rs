@@ -4,7 +4,12 @@ use crate::{
     models::{Theme, ThemeColors, ThemeLayers, ThemeLibrary, ThemeSource},
 };
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf};
+use std::{
+    fs::{self, OpenOptions},
+    io::Write,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 pub use crate::models::THEME_LIBRARY_VERSION;
 
@@ -17,34 +22,48 @@ pub struct PersistedSettings {
 
 pub fn load_theme_library() -> Result<ThemeLibrary, CommandError> {
     let path = theme_library_path()?;
-    let mut library = match fs::read(&path) {
-        Ok(bytes) => deserialize_theme_library(&bytes)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+    let library = match load_theme_library_from_path(&path) {
+        Ok(library) => library,
+        Err(error) if error.code == "background_library_not_found" => {
             load_or_migrate_legacy_settings()?
         }
-        Err(error) => {
-            return Err(CommandError::new(
-                "background_library_read_failed",
-                error.to_string(),
-            ))
-        }
+        Err(error) => return Err(error),
     };
     diagnostic(format_args!(
-        "[storage/load] path={} selectedThemeId={:?} backgrounds={} before_normalize",
+        "[storage/load] path={} selectedThemeId={:?} backgrounds={} after_normalize",
         path.display(),
         library.selected_theme_id,
         library.themes.len()
     ));
-    let changed = normalize_background_library(&mut library);
-    if changed {
-        save_theme_library(&library)?;
+    Ok(library)
+}
+
+pub(crate) fn load_theme_library_from_path(path: &Path) -> Result<ThemeLibrary, CommandError> {
+    let bytes = fs::read(path).map_err(|error| {
+        let code = if error.kind() == std::io::ErrorKind::NotFound {
+            "background_library_not_found"
+        } else {
+            "background_library_read_failed"
+        };
+        CommandError::new(code, error.to_string())
+    })?;
+    let mut library = deserialize_theme_library(&bytes)?;
+    if normalize_background_library(&mut library) {
+        save_theme_library_to_path(path, &library)?;
     }
     Ok(library)
 }
 
 pub fn save_theme_library(library: &ThemeLibrary) -> Result<(), CommandError> {
-    validate_theme_library_version(library)?;
     let path = theme_library_path()?;
+    save_theme_library_to_path(&path, library)
+}
+
+pub(crate) fn save_theme_library_to_path(
+    path: &Path,
+    library: &ThemeLibrary,
+) -> Result<(), CommandError> {
+    validate_theme_library_version(library)?;
     let serialized = serde_json::to_vec_pretty(library).map_err(|error| {
         CommandError::new("background_library_serialize_failed", error.to_string())
     })?;
@@ -67,10 +86,10 @@ pub fn save_theme_library(library: &ThemeLibrary) -> Result<(), CommandError> {
                 &theme.colors.background
             ))
     ));
-    fs::write(&path, serialized)
-        .map_err(|error| CommandError::new("background_library_write_failed", error.to_string()))?;
+    atomic_write(path, &serialized)?;
+
     if std::env::var_os("CODESKIN_DIAGNOSTICS").as_deref() == Some(std::ffi::OsStr::new("1")) {
-        match fs::read(&path).and_then(|bytes| {
+        match fs::read(path).and_then(|bytes| {
             let raw = String::from_utf8_lossy(&bytes);
             let selected_present = library
                 .selected_theme_id
@@ -87,12 +106,61 @@ pub fn save_theme_library(library: &ThemeLibrary) -> Result<(), CommandError> {
                     selected_present,
                     on_disk.themes.len()
                 )),
-                Err(error) => diagnostic(format_args!("[save] post-write parse failed path={}: {error}", path.display())),
+                Err(error) => diagnostic(format_args!(
+                    "[save] post-write parse failed path={}: {error}",
+                    path.display()
+                )),
             },
-            Err(error) => diagnostic(format_args!("[save] post-write read failed path={}: {error}", path.display())),
+            Err(error) => diagnostic(format_args!(
+                "[save] post-write read failed path={}: {error}",
+                path.display()
+            )),
         }
     }
     Ok(())
+}
+
+fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), CommandError> {
+    let parent = path.parent().ok_or_else(|| {
+        CommandError::new("background_library_write_failed", "主题库路径没有父目录。")
+    })?;
+    fs::create_dir_all(parent)
+        .map_err(|error| CommandError::new("background_library_write_failed", error.to_string()))?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            CommandError::new("background_library_write_failed", "主题库路径没有文件名。")
+        })?;
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temporary_path = parent.join(format!(".{file_name}.{}.{}.tmp", std::process::id(), nonce));
+    let write_result = (|| -> Result<(), CommandError> {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary_path)
+            .map_err(|error| {
+                CommandError::new("background_library_write_failed", error.to_string())
+            })?;
+        file.write_all(bytes).map_err(|error| {
+            CommandError::new("background_library_write_failed", error.to_string())
+        })?;
+        file.sync_all().map_err(|error| {
+            CommandError::new("background_library_write_failed", error.to_string())
+        })?;
+        drop(file);
+        fs::rename(&temporary_path, path).map_err(|error| {
+            CommandError::new("background_library_write_failed", error.to_string())
+        })?;
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temporary_path);
+    }
+    write_result
 }
 
 pub(crate) fn deserialize_theme_library(bytes: &[u8]) -> Result<ThemeLibrary, CommandError> {
@@ -196,7 +264,63 @@ fn settings_path() -> Result<PathBuf, CommandError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{deserialize_theme_library, migrate_legacy_settings, THEME_LIBRARY_VERSION};
+    use super::{
+        deserialize_theme_library, load_theme_library_from_path, migrate_legacy_settings,
+        save_theme_library_to_path, THEME_LIBRARY_VERSION,
+    };
+    use crate::models::{Theme, ThemeColors, ThemeLayers, ThemeLibrary};
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn wallpaper(id: &str, display: &str, accent: &str) -> Theme {
+        Theme::wallpaper(
+            id.into(),
+            "Test wallpaper".into(),
+            "test".into(),
+            ThemeColors {
+                accent: accent.into(),
+                secondary: "#445566".into(),
+                background: "#112233".into(),
+                surface: "#223344".into(),
+                foreground: "#F4F7FF".into(),
+                muted: "#BBC5D8".into(),
+            },
+            display.into(),
+            "file:///C:/CodeSkin/wallpapers/source.png".into(),
+            ThemeLayers::wallpaper(),
+        )
+    }
+
+    #[test]
+    fn selected_wallpaper_round_trips_through_an_independent_storage_path() {
+        let path = std::env::temp_dir().join(format!(
+            "codeskin-theme-round-trip-{}-themes.json",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let theme = wallpaper(
+            "wallpaper-a",
+            "file:///C:/CodeSkin/wallpapers/a.jpg",
+            "#123456",
+        );
+        let library = ThemeLibrary {
+            version: THEME_LIBRARY_VERSION,
+            selected_theme_id: Some(theme.id.clone()),
+            themes: vec![theme.clone()],
+        };
+
+        save_theme_library_to_path(&path, &library).expect("save selection");
+        let recovered = load_theme_library_from_path(&path).expect("new storage reads selection");
+        let _ = fs::remove_file(path);
+
+        assert_eq!(recovered.selected_theme_id.as_deref(), Some("wallpaper-a"));
+        assert_eq!(recovered.themes[0].background_image, theme.background_image);
+        assert_eq!(recovered.themes[0].colors, theme.colors);
+    }
 
     #[test]
     fn reads_v1_themes_key_but_writes_as_backgrounds() {

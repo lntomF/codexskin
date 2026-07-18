@@ -5,8 +5,10 @@ use crate::{
     injection::{
         install_expression, InjectionRegistry, RegisteredTarget, RESTORE_SCRIPT, VERIFY_SCRIPT,
     },
-    models::{CodexConnectionState, CodexStatus, TargetVerification, Theme, VerifyResult},
-    process,
+    models::{
+        CodexConnectionState, CodexStatus, TargetVerification, Theme, ThemeLibrary, VerifyResult,
+    },
+    process, storage,
 };
 use serde_json::{json, Value};
 use std::{
@@ -28,6 +30,63 @@ struct RuntimeState {
     active_theme: Option<Theme>,
     registry: InjectionRegistry,
     next_registration_id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum PersistedThemeRecovery {
+    NoSelection,
+    MissingTheme {
+        theme_id: String,
+    },
+    MissingWallpaper {
+        theme_id: String,
+        wallpaper: Option<String>,
+        detail: String,
+    },
+    Ready(Theme),
+}
+
+pub(crate) fn persisted_theme_recovery(library: &ThemeLibrary) -> PersistedThemeRecovery {
+    let Some(theme_id) = library.selected_theme_id.as_ref() else {
+        return PersistedThemeRecovery::NoSelection;
+    };
+    let Some(theme) = library.themes.iter().find(|theme| &theme.id == theme_id) else {
+        return PersistedThemeRecovery::MissingTheme {
+            theme_id: theme_id.clone(),
+        };
+    };
+    let Some(wallpaper) = theme.background_image.as_ref() else {
+        return PersistedThemeRecovery::MissingWallpaper {
+            theme_id: theme.id.clone(),
+            wallpaper: None,
+            detail: "背景缺少派生壁纸路径。".into(),
+        };
+    };
+    match storage::read_managed_background_bytes(wallpaper) {
+        Ok(_) => PersistedThemeRecovery::Ready(theme.clone()),
+        Err(error) => PersistedThemeRecovery::MissingWallpaper {
+            theme_id: theme.id.clone(),
+            wallpaper: Some(wallpaper.clone()),
+            detail: error.message,
+        },
+    }
+}
+
+pub(crate) fn target_apply_plan(
+    active_theme: Option<&Theme>,
+    targets: &[PageTarget],
+    connected_target_ids: &HashSet<String>,
+    refresh_existing: bool,
+) -> Vec<(PageTarget, Theme)> {
+    let Some(theme) = active_theme else {
+        return Vec::new();
+    };
+    targets
+        .iter()
+        .filter(|target| refresh_existing || !connected_target_ids.contains(&target.id))
+        .cloned()
+        .map(|target| (target, theme.clone()))
+        .collect()
 }
 
 pub struct AppState {
@@ -98,6 +157,92 @@ impl AppState {
         }
     }
 
+    pub async fn publish_active_theme(&self, theme: Theme) {
+        diagnostic(format_args!(
+            "[runtime] publish active_theme={} wallpaper={:?}",
+            theme.id, theme.background_image
+        ));
+        self.runtime.lock().await.active_theme = Some(theme);
+    }
+
+    pub async fn restore_persisted_theme_on_startup(self: &Arc<Self>) {
+        let path = match storage::theme_library_path() {
+            Ok(path) => path,
+            Err(error) => {
+                diagnostic(format_args!(
+                    "[startup] could not resolve theme path: {error}"
+                ));
+                return;
+            }
+        };
+        let library = match storage::load_theme_library() {
+            Ok(library) => library,
+            Err(error) => {
+                diagnostic(format_args!(
+                    "[startup] persisted theme read failed path={}: {error}",
+                    path.display()
+                ));
+                return;
+            }
+        };
+        match persisted_theme_recovery(&library) {
+            PersistedThemeRecovery::Ready(theme) => {
+                diagnostic(format_args!(
+                    "[startup] hydrated selectedThemeId={} from path={}",
+                    theme.id,
+                    path.display()
+                ));
+                self.publish_active_theme(theme.clone()).await;
+                self.start_reconnector();
+                self.apply_published_theme_to_running_codex(theme).await;
+            }
+            PersistedThemeRecovery::NoSelection => diagnostic(format_args!(
+                "[startup] no selected theme in path={}",
+                path.display()
+            )),
+            PersistedThemeRecovery::MissingTheme { theme_id } => diagnostic(format_args!(
+                "[startup] selectedThemeId={} is absent from path={}; preserving selection without injection",
+                theme_id,
+                path.display()
+            )),
+            PersistedThemeRecovery::MissingWallpaper {
+                theme_id,
+                wallpaper,
+                detail,
+            } => diagnostic(format_args!(
+                "[startup] selectedThemeId={} wallpaper={:?} is unavailable in path={}; preserving selection without injection: {}",
+                theme_id,
+                wallpaper,
+                path.display(),
+                detail
+            )),
+        }
+    }
+
+    async fn apply_published_theme_to_running_codex(self: &Arc<Self>, theme: Theme) {
+        let status = process::inspect_running_codex();
+        let CodexConnectionState::DebugPortDetected = status.state else {
+            diagnostic(format_args!(
+                "[startup] no attachable Codex target yet; watcher will wait: state={:?} detail={}",
+                status.state, status.detail
+            ));
+            return;
+        };
+        let Some(port) = status.port else {
+            diagnostic("[startup] attachable Codex status did not provide a CDP port.");
+            return;
+        };
+        self.runtime.lock().await.port = Some(port);
+        match self.install_on_all_targets(port, theme, true).await {
+            Ok(()) => diagnostic(format_args!(
+                "[startup] immediate apply completed for existing Codex port={port}"
+            )),
+            Err(error) => diagnostic(format_args!(
+                "[startup] immediate apply deferred for port={port}: {error}"
+            )),
+        }
+    }
+
     pub async fn apply_saved_theme(
         self: &Arc<Self>,
         theme: Theme,
@@ -110,6 +255,8 @@ impl AppState {
             theme.colors.secondary,
             theme.colors.background
         ));
+        self.publish_active_theme(theme.clone()).await;
+        self.start_reconnector();
         let status = self.connect_or_start_codex().await?;
         diagnostic(format_args!(
             "[apply] connection status state={:?} port={:?} detail={}",
@@ -121,10 +268,9 @@ impl AppState {
         self.install_on_all_targets(port, theme.clone(), true)
             .await?;
         diagnostic(format_args!(
-            "[apply] target install completed; publishing active_theme={}",
+            "[apply] target install completed for active_theme={}",
             theme.id
         ));
-        self.runtime.lock().await.active_theme = Some(theme);
         self.verify_theme().await
     }
 
@@ -401,18 +547,22 @@ impl AppState {
         };
         drop(stale_targets);
 
-        for target in targets {
-            let already_registered = self
-                .runtime
-                .lock()
-                .await
+        let connected_target_ids = {
+            let runtime = self.runtime.lock().await;
+            runtime
                 .registry
                 .targets
-                .get(&target.id)
-                .is_some_and(|registered| registered.client.is_connected());
-            if refresh_existing || !already_registered {
-                self.install_on_target(port, target, theme.clone()).await?;
-            }
+                .iter()
+                .filter_map(|(id, registered)| registered.client.is_connected().then(|| id.clone()))
+                .collect::<HashSet<_>>()
+        };
+        for (target, target_theme) in target_apply_plan(
+            Some(&theme),
+            &targets,
+            &connected_target_ids,
+            refresh_existing,
+        ) {
+            self.install_on_target(port, target, target_theme).await?;
         }
         Ok(())
     }
@@ -710,13 +860,101 @@ fn cdp_result(response: Value) -> Result<Value, CommandError> {
 
 #[cfg(test)]
 mod live_cdp_tests {
-    use super::{execute_after_script_registration, restore_target_is_complete, AppState};
-    use crate::error::CommandError;
-    use crate::models::TargetVerification;
-    use std::sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
+    use super::{
+        execute_after_script_registration, persisted_theme_recovery, restore_target_is_complete,
+        target_apply_plan, AppState, PersistedThemeRecovery,
     };
+    use crate::cdp::PageTarget;
+    use crate::error::CommandError;
+    use crate::models::{
+        TargetVerification, Theme, ThemeColors, ThemeLayers, ThemeLibrary, THEME_LIBRARY_VERSION,
+    };
+    use std::{
+        collections::HashSet,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+    };
+
+    fn wallpaper(id: &str, image: &str) -> Theme {
+        Theme::wallpaper(
+            id.into(),
+            id.into(),
+            "test".into(),
+            ThemeColors {
+                accent: "#123456".into(),
+                secondary: "#445566".into(),
+                background: "#112233".into(),
+                surface: "#223344".into(),
+                foreground: "#F4F7FF".into(),
+                muted: "#BBC5D8".into(),
+            },
+            image.into(),
+            image.into(),
+            ThemeLayers::wallpaper(),
+        )
+    }
+
+    fn target(id: &str) -> PageTarget {
+        PageTarget {
+            id: id.into(),
+            url: "app://-/index.html".into(),
+            websocket_url: format!("ws://127.0.0.1:9222/devtools/page/{id}"),
+        }
+    }
+
+    #[test]
+    fn startup_recovery_preserves_selected_theme_when_wallpaper_file_is_missing() {
+        let theme = wallpaper(
+            "wallpaper-missing",
+            "file:///C:/CodeSkin/wallpapers/does-not-exist.jpg",
+        );
+        let library = ThemeLibrary {
+            version: THEME_LIBRARY_VERSION,
+            selected_theme_id: Some(theme.id.clone()),
+            themes: vec![theme],
+        };
+
+        let recovery = persisted_theme_recovery(&library);
+
+        assert!(matches!(
+            recovery,
+            PersistedThemeRecovery::MissingWallpaper { ref theme_id, .. }
+                if theme_id == "wallpaper-missing"
+        ));
+        assert_eq!(
+            library.selected_theme_id.as_deref(),
+            Some("wallpaper-missing")
+        );
+    }
+
+    #[test]
+    fn new_cdp_target_receives_the_current_active_theme_after_old_target_disappears() {
+        let theme_b = wallpaper("wallpaper-b", "file:///C:/CodeSkin/wallpapers/b.jpg");
+        let connected = HashSet::from(["old-target".to_owned()]);
+
+        let plan = target_apply_plan(Some(&theme_b), &[target("new-target")], &connected, false);
+
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].0.id, "new-target");
+        assert_eq!(plan[0].1.id, "wallpaper-b");
+    }
+
+    #[test]
+    fn reconnect_uses_newly_selected_theme_instead_of_a_stale_theme() {
+        let theme_a = wallpaper("wallpaper-a", "file:///C:/CodeSkin/wallpapers/a.jpg");
+        let theme_b = wallpaper("wallpaper-b", "file:///C:/CodeSkin/wallpapers/b.jpg");
+        let connected = HashSet::new();
+
+        let before_user_change =
+            target_apply_plan(Some(&theme_a), &[target("target-1")], &connected, false);
+        let after_user_change =
+            target_apply_plan(Some(&theme_b), &[target("target-2")], &connected, false);
+
+        assert_eq!(before_user_change[0].1.id, "wallpaper-a");
+        assert_eq!(after_user_change[0].1.id, "wallpaper-b");
+    }
 
     fn target_check(active: bool, wallpaper_layer: bool, style_layer: bool) -> TargetVerification {
         TargetVerification {
