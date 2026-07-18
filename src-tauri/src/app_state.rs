@@ -73,23 +73,23 @@ impl AppState {
             }
             CodexConnectionState::NotRunning => {
                 let remembered_executable = self.runtime.lock().await.executable_path.clone();
-                let executable = remembered_executable
-                    .filter(|path| path.is_file())
-                    .or_else(process::find_installed_codex)
-                    .ok_or_else(|| {
+                let launch_target = match remembered_executable.filter(|path| path.is_file()) {
+                    Some(executable) => process::classify_codex_launch_target(executable)?,
+                    None => process::find_installed_codex_launch_target()?.ok_or_else(|| {
                         CommandError::new(
                             "codex_executable_not_found",
                             "未找到 Codex Desktop 可执行文件。请确认 Codex Desktop 已安装。",
                         )
-                    })?;
+                    })?,
+                };
                 let port = process::find_available_loopback_port()?;
-                process::launch_codex(&executable, port)?;
+                process::launch_codex(&launch_target, port)?;
                 self.wait_for_page_targets(port).await?;
                 self.runtime.lock().await.port = Some(port);
                 Ok(CodexStatus {
                     state: CodexConnectionState::Connected,
                     port: Some(port),
-                    executable_path: Some(executable.display().to_string()),
+                    executable_path: Some(launch_target.executable_path().display().to_string()),
                     detail: "已启动 Codex 并发现本地 CDP 页面。".into(),
                 })
             }
@@ -321,10 +321,7 @@ impl AppState {
             }
             sleep(Duration::from_millis(300)).await;
         }
-        Err(CommandError::new(
-            "codex_cdp_start_timeout",
-            last_error.unwrap_or_else(|| "等待 Codex 本地 CDP 超时。".into()),
-        ))
+        Err(cdp_start_timeout_error(port, last_error))
     }
 
     async fn install_on_all_targets(
@@ -620,6 +617,18 @@ where
     }
 }
 
+fn cdp_start_timeout_error(port: u16, last_error: Option<String>) -> CommandError {
+    let last_check = last_error.unwrap_or_else(|| "等待 Codex 本地 CDP 超时。".into());
+    CommandError::new(
+        "codex_cdp_start_timeout",
+        format!(
+            "Codex 已收到启动请求，但在限定时间内未在 127.0.0.1:{port} 提供可注入的 CDP 页面。\n\
+             未连接任何外部地址。请先通过 Codex 自己的菜单或托盘正常退出，并确认进程已完全结束后重试。\n\
+             如果这是 Microsoft Store 版 Codex，当前版本可能没有将启动参数转交给 Electron；CodeSkin 不会强制结束 Codex，也不会修改其安装文件。\n\
+             最后一次本机检查：{last_check}"
+        ),
+    )
+}
 fn restore_target_is_complete(
     check: &TargetVerification,
     post_restore_verify_succeeded: bool,
@@ -665,6 +674,17 @@ mod live_cdp_tests {
         }
     }
 
+    #[test]
+    fn cdp_start_timeout_explains_loopback_scope_and_store_retry_path() {
+        let error = super::cdp_start_timeout_error(9223, Some("connection refused".to_string()));
+
+        assert_eq!(error.code, "codex_cdp_start_timeout");
+        assert!(error.message.contains("127.0.0.1:9223"));
+        assert!(error.message.contains("Microsoft Store"));
+        assert!(error.message.contains("正常退出"));
+        assert!(error.message.contains("未连接任何外部地址"));
+        assert!(!error.message.contains("0.0.0.0"));
+    }
     #[test]
     fn restore_requires_successful_post_browser_verification_and_no_remaining_markers() {
         assert!(restore_target_is_complete(

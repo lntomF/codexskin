@@ -21,6 +21,7 @@ out/
 *.local
 
 # Runtime, credentials, and local state
+.vscode/
 .env
 .env.*
 *.pem
