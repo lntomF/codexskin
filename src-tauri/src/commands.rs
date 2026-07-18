@@ -1,5 +1,6 @@
 use crate::{
     app_state::AppState,
+    diagnostic,
     error::CommandError,
     models::{BackgroundLibraryView, BackgroundView, CodexStatus, ThemeLibrary, VerifyResult},
     process, storage,
@@ -29,6 +30,9 @@ pub async fn apply_background(
     background_id: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<VerifyResult, CommandError> {
+    diagnostic(format_args!(
+        "[save] UI invoke apply_background backgroundId={background_id}"
+    ));
     apply_saved_background_by_id(&background_id, state.inner()).await
 }
 
@@ -52,8 +56,19 @@ pub(crate) async fn apply_saved_background_by_id(
     storage::refresh_wallpaper_theme_visuals(&mut background, &display_bytes)?;
     library.themes[index] = background.clone();
 
+    diagnostic(format_args!(
+        "[apply] selected id={} displayImage={:?} palette=({}, {}, {})",
+        background_id,
+        background.background_image,
+        background.colors.accent,
+        background.colors.secondary,
+        background.colors.background
+    ));
     let result = state.apply_saved_theme(background).await?;
     library.selected_theme_id = Some(background_id.to_owned());
+    diagnostic(format_args!(
+        "[save] persisting selected background after successful apply id={background_id}"
+    ));
     storage::save_theme_library(&library)?;
     state.start_reconnector();
     Ok(result)

@@ -1,4 +1,5 @@
 use crate::{
+    diagnostic,
     error::CommandError,
     models::{Theme, ThemeColors, ThemeLayers, ThemeLibrary, ThemeSource},
 };
@@ -28,6 +29,12 @@ pub fn load_theme_library() -> Result<ThemeLibrary, CommandError> {
             ))
         }
     };
+    diagnostic(format_args!(
+        "[storage/load] path={} selectedThemeId={:?} backgrounds={} before_normalize",
+        path.display(),
+        library.selected_theme_id,
+        library.themes.len()
+    ));
     let changed = normalize_background_library(&mut library);
     if changed {
         save_theme_library(&library)?;
@@ -41,8 +48,51 @@ pub fn save_theme_library(library: &ThemeLibrary) -> Result<(), CommandError> {
     let serialized = serde_json::to_vec_pretty(library).map_err(|error| {
         CommandError::new("background_library_serialize_failed", error.to_string())
     })?;
-    fs::write(path, serialized)
-        .map_err(|error| CommandError::new("background_library_write_failed", error.to_string()))
+    diagnostic(format_args!(
+        "[save] requested path={} selectedThemeId={:?} wallpaper={:?} palette={:?}",
+        path.display(),
+        library.selected_theme_id,
+        library
+            .selected_theme_id
+            .as_ref()
+            .and_then(|id| library.themes.iter().find(|theme| &theme.id == id))
+            .and_then(|theme| theme.background_image.as_deref()),
+        library
+            .selected_theme_id
+            .as_ref()
+            .and_then(|id| library.themes.iter().find(|theme| &theme.id == id))
+            .map(|theme| (
+                &theme.colors.accent,
+                &theme.colors.secondary,
+                &theme.colors.background
+            ))
+    ));
+    fs::write(&path, serialized)
+        .map_err(|error| CommandError::new("background_library_write_failed", error.to_string()))?;
+    if std::env::var_os("CODESKIN_DIAGNOSTICS").as_deref() == Some(std::ffi::OsStr::new("1")) {
+        match fs::read(&path).and_then(|bytes| {
+            let raw = String::from_utf8_lossy(&bytes);
+            let selected_present = library
+                .selected_theme_id
+                .as_deref()
+                .is_some_and(|id| raw.contains(id));
+            Ok((bytes, selected_present))
+        }) {
+            Ok((bytes, selected_present)) => match deserialize_theme_library(&bytes) {
+                Ok(on_disk) => diagnostic(format_args!(
+                    "[save] verified on disk path={} bytes={} selectedThemeId={:?} selectedIdPresent={} backgrounds={}",
+                    path.display(),
+                    bytes.len(),
+                    on_disk.selected_theme_id,
+                    selected_present,
+                    on_disk.themes.len()
+                )),
+                Err(error) => diagnostic(format_args!("[save] post-write parse failed path={}: {error}", path.display())),
+            },
+            Err(error) => diagnostic(format_args!("[save] post-write read failed path={}: {error}", path.display())),
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn deserialize_theme_library(bytes: &[u8]) -> Result<ThemeLibrary, CommandError> {

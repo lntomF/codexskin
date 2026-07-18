@@ -1,5 +1,6 @@
 use crate::{
     cdp::{discover_page_targets, reconnect::RECONNECT_INTERVAL_SECONDS, CdpClient, PageTarget},
+    diagnostic,
     error::CommandError,
     injection::{
         install_expression, InjectionRegistry, RegisteredTarget, RESTORE_SCRIPT, VERIFY_SCRIPT,
@@ -101,12 +102,28 @@ impl AppState {
         self: &Arc<Self>,
         theme: Theme,
     ) -> Result<VerifyResult, CommandError> {
+        diagnostic(format_args!(
+            "[apply] begin themeId={} wallpaper={:?} palette=({}, {}, {})",
+            theme.id,
+            theme.background_image,
+            theme.colors.accent,
+            theme.colors.secondary,
+            theme.colors.background
+        ));
         let status = self.connect_or_start_codex().await?;
+        diagnostic(format_args!(
+            "[apply] connection status state={:?} port={:?} detail={}",
+            status.state, status.port, status.detail
+        ));
         let port = status
             .port
             .ok_or_else(|| CommandError::new("cdp_port_missing", "没有可用的本地 CDP 端口。"))?;
         self.install_on_all_targets(port, theme.clone(), true)
             .await?;
+        diagnostic(format_args!(
+            "[apply] target install completed; publishing active_theme={}",
+            theme.id
+        ));
         self.runtime.lock().await.active_theme = Some(theme);
         self.verify_theme().await
     }
@@ -150,6 +167,10 @@ impl AppState {
                             .get("result")
                             .and_then(|value| value.get("value"))
                             .unwrap_or(&Value::Null);
+                        diagnostic(format_args!(
+                            "[verify] targetId={} targetUrl={} Runtime.evaluate value={}",
+                            target_id, target_url, value
+                        ));
                         TargetVerification::from_browser_value(target_id, target_url, value)
                     }
                     Err(error) => TargetVerification::failed(target_id, target_url, error.message),
@@ -292,21 +313,34 @@ impl AppState {
         if self.reconnect_loop_started.swap(true, Ordering::AcqRel) {
             return;
         }
+        diagnostic("[watcher] reconnect loop started.");
         let state = Arc::clone(self);
         tokio::spawn(async move {
             loop {
                 sleep(Duration::from_secs(RECONNECT_INTERVAL_SECONDS)).await;
                 let theme = state.runtime.lock().await.active_theme.clone();
-                let Some(theme) = theme else { continue };
+                let Some(theme) = theme else {
+                    diagnostic("[watcher] no runtime active_theme; skipping Codex discovery.");
+                    continue;
+                };
 
                 let status = process::inspect_running_codex();
+                diagnostic(format_args!(
+                    "[watcher] Codex inspect state={:?} port={:?} executable={:?} detail={}",
+                    status.state, status.port, status.executable_path, status.detail
+                ));
                 let CodexConnectionState::DebugPortDetected = status.state else {
                     continue;
                 };
                 let Some(port) = status.port else { continue };
 
                 state.runtime.lock().await.port = Some(port);
-                let _ = state.install_on_all_targets(port, theme, false).await;
+                match state.install_on_all_targets(port, theme, false).await {
+                    Ok(()) => diagnostic(format_args!("[watcher] apply completed for port={port}")),
+                    Err(error) => diagnostic(format_args!(
+                        "[watcher] apply failed for port={port}: {error}"
+                    )),
+                };
             }
         });
     }
@@ -331,6 +365,15 @@ impl AppState {
         refresh_existing: bool,
     ) -> Result<(), CommandError> {
         let targets = discover_page_targets(port).await?;
+        diagnostic(format_args!(
+            "[watcher] discover targets port={} refreshExisting={} targets={:?}",
+            port,
+            refresh_existing,
+            targets
+                .iter()
+                .map(|target| (&target.id, &target.url, &target.websocket_url))
+                .collect::<Vec<_>>()
+        ));
         if targets.is_empty() {
             return Err(CommandError::new(
                 "codex_page_not_found",
@@ -400,6 +443,10 @@ impl AppState {
                 .await;
         }
 
+        diagnostic(format_args!(
+            "[apply] installing targetId={} targetUrl={} websocket={}",
+            target.id, target.url, target.websocket_url
+        ));
         let client = Arc::new(CdpClient::connect(&target.websocket_url, port).await?);
         let event_receiver = client.subscribe_events();
         cdp_result(client.call("Page.enable", json!({})).await?)?;
@@ -440,6 +487,16 @@ impl AppState {
             Ok(response) => cdp_result(response),
             Err(error) => Err(error),
         };
+        match &execute_result {
+            Ok(value) => diagnostic(format_args!(
+                "[cdp] Runtime.evaluate install targetId={} success result={}",
+                target.id, value
+            )),
+            Err(error) => diagnostic(format_args!(
+                "[cdp] Runtime.evaluate install targetId={} error={error}",
+                target.id
+            )),
+        }
         let cleanup_client = Arc::clone(&client);
         let cleanup_script_id = script_id.clone();
         execute_after_script_registration(execute_result, move || async move {
