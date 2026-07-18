@@ -65,3 +65,6 @@ Thumbs.db
 docs/**
 /CodeSkin-loopback-only.exe
 /src-tauri/artifacts/
+
+# Local Git worktrees
+.worktrees/
