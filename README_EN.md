@@ -45,39 +45,45 @@
 
 <table align="center">
   <tr align="center" style="font-weight: bold; background-color: transparent;">
-    <td>⚡ UI</td>
+    <td>⚡ IU </td>
     <td>✨ Kimjiwon</td>
   </tr>
   <tr align="center">
     <td width="50%">
-      <img src="readme-image/AC/UI1.png" alt="Real device screenshot: UI1" style="max-width:100%; border-radius: 8px;" />
+      <img src="readme-image/AC/UI2.png" alt="真机截图：UI2" style="max-width:100%; border-radius: 8px;" />
+      <img src="readme-image/AC/UI1.png" alt="真机截图：UI1" style="max-width:100%; border-radius: 8px;" />
     </td>
     <td width="50%">
-      <img src="readme-image/AC/k1.png" alt="Real device screenshot: K1" style="max-width:100%; border-radius: 8px;" />
-    </td>
-  </tr>
-  <tr align="center" style="font-weight: bold; background-color: transparent;">
-    <td>Han Li</td>
-    <td>Mu Peiling</td>
-  </tr>
-  <tr align="center">
-    <td width="50%">
-      <img src="readme-image/AC/h1.png" alt="Real device screenshot: H1" style="max-width:100%; border-radius: 8px;" />
-    </td>
-    <td width="50%">
-      <img src="readme-image/AC/m1.png" alt="Real device screenshot: M1" style="max-width:100%; border-radius: 8px;" />
+      <img src="readme-image/AC/k2.png" alt="真机截图：K2" style="max-width:100%; border-radius: 8px;" />
+      <img src="readme-image/AC/k1.png" alt="真机截图：K1" style="max-width:100%; border-radius: 8px; margin-top: 8px;" />
     </td>
   </tr>
   <tr align="center" style="font-weight: bold; background-color: transparent;">
-    <td>Yijie</td>
-    <td>Kun</td>
+    <td>  HanLi  </td>
+    <td>  MuPeiling  </td>
   </tr>
   <tr align="center">
     <td width="50%">
-      <img src="readme-image/AC/y1.png" alt="Real device screenshot: Y1" style="max-width:100%; border-radius: 8px;" />
+      <img src="readme-image/AC/h1.png" alt="真机截图：H1" style="max-width:100%; border-radius: 8px;" />
+      <img src="readme-image/AC/h2.png" alt="真机截图：H2" style="max-width:100%; border-radius: 8px; margin-top: 8px;" />
     </td>
     <td width="50%">
-      <img src="readme-image/AC/k2.png" alt="Real device screenshot: K2" style="max-width:100%; border-radius: 8px;" />
+      <img src="readme-image/AC/m1.png" alt="真机截图：M1" style="max-width:100%; border-radius: 8px;" />
+      <img src="readme-image/AC/m2.png" alt="真机截图：M2" style="max-width:100%; border-radius: 8px; margin-top: 8px;" />
+    </td>
+  </tr>
+  <tr align="center" style="font-weight: bold; background-color: transparent;">
+    <td>  YuJie  </td>
+    <td>  KUN  </td>
+  </tr>
+  <tr align="center">
+    <td width="50%">
+      <img src="readme-image/AC/y1.png" alt="真机截图：Y1" style="max-width:100%; border-radius: 8px;" />
+      <img src="readme-image/AC/y2.png" alt="真机截图：Y2" style="max-width:100%; border-radius: 8px;" />
+    </td>
+    <td width="50%">
+      <img src="readme-image/AC/ku1.png" alt="真机截图：K1" style="max-width:100%; border-radius: 8px;" />
+      <img src="readme-image/AC/ku2.png" alt="真机截图：K2" style="max-width:100%; border-radius: 8px; margin-top: 8px;" />
     </td>
   </tr>
 </table>

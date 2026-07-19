@@ -49,7 +49,7 @@ English version: [README_EN.md](README_EN.md)
 <table align="center">
   <!-- 第一行：标题 -->
   <tr align="center" style="font-weight: bold; background-color: transparent;">
-    <td>⚡ UI </td>
+    <td>⚡ IU </td>
     <td>✨ Kimjiwon</td>
   </tr>
   <!-- 第一行：图片 -->
