@@ -22,38 +22,48 @@ mod tests {
         assert!(!INSTALL_SCRIPT.contains("document.body.innerHTML"));
     }
     #[test]
-    fn wallpaper_is_layered_below_codex_and_only_the_composer_is_glass() {
+    fn wallpaper_is_layered_below_codex_with_regional_contrast_safe_glass() {
         assert!(INSTALL_SCRIPT.contains("z-index: 0;"));
         assert!(INSTALL_SCRIPT.contains("] #root {"));
         assert!(INSTALL_SCRIPT.contains("z-index: 1;"));
+        assert!(INSTALL_SCRIPT.contains("::after"));
+        assert!(INSTALL_SCRIPT.contains("--codeskin-wallpaper-veil"));
+        assert!(INSTALL_SCRIPT.contains("opacity: var(--codeskin-current-overlay-opacity);"));
         assert!(INSTALL_SCRIPT.contains(".main-surface"));
-        assert!(INSTALL_SCRIPT.contains(".app-header-tint"));
-        assert!(INSTALL_SCRIPT
-            .contains("Math.min(numberValue(layers.focusOverlayOpacity, 0.18), 0.22)"));
         assert!(INSTALL_SCRIPT.contains("background: transparent !important;"));
+        assert!(INSTALL_SCRIPT.contains(".app-shell-left-panel"));
         assert!(INSTALL_SCRIPT.contains(".composer-surface-chrome"));
-        assert!(INSTALL_SCRIPT
-            .contains("backdrop-filter: blur(var(--codeskin-composer-blur)) saturate(112%);"));
-        assert!(INSTALL_SCRIPT.contains("--codeskin-sidebar-foreground"));
-        assert!(INSTALL_SCRIPT.contains("--codeskin-content-foreground"));
-        assert!(INSTALL_SCRIPT.contains("--codeskin-info-foreground"));
-        assert!(!INSTALL_SCRIPT.contains("--codeskin-sidebar-panel-opacity"));
-        assert!(!INSTALL_SCRIPT.contains("--codeskin-content-panel-opacity"));
-        assert!(!INSTALL_SCRIPT.contains("--codeskin-info-panel-opacity"));
-        assert!(!INSTALL_SCRIPT.contains("--codeskin-sidebar-blur"));
-        assert!(!INSTALL_SCRIPT.contains("--codeskin-content-blur"));
-        assert!(!INSTALL_SCRIPT.contains("--codeskin-info-blur"));
+        assert!(INSTALL_SCRIPT.contains("--codeskin-sidebar-panel-color"));
+        assert!(INSTALL_SCRIPT.contains("--codeskin-sidebar-panel-opacity"));
+        assert!(INSTALL_SCRIPT.contains("--codeskin-content-panel-color"));
+        assert!(INSTALL_SCRIPT.contains("--codeskin-content-panel-opacity"));
+        assert!(INSTALL_SCRIPT.contains("--codeskin-info-panel-color"));
+        assert!(INSTALL_SCRIPT.contains("--codeskin-composer-panel-color"));
+        assert!(INSTALL_SCRIPT.contains("--codeskin-composer-panel-opacity"));
+        assert!(INSTALL_SCRIPT.contains("backdrop-filter: blur(var(--codeskin-sidebar-blur))"));
+        assert!(INSTALL_SCRIPT.contains("backdrop-filter: blur(var(--codeskin-composer-blur))"));
+        assert!(!INSTALL_SCRIPT.contains("--codeskin-glass-color"));
+        assert!(!INSTALL_SCRIPT.contains("#11151C"));
+        assert!(INSTALL_SCRIPT.contains("group/home-suggestions"));
         assert!(!INSTALL_SCRIPT.contains(":root[data-codeskin-theme-id] button,"));
     }
     #[test]
-    fn environment_summary_and_toolbar_portal_text_follow_contrast_without_surface_overrides() {
-        assert!(INSTALL_SCRIPT.contains("group/summary-panel-item"));
+    fn menus_dialogs_and_dropdowns_use_their_sampled_regional_glass() {
         assert!(INSTALL_SCRIPT.contains("button.no-drag[aria-haspopup=\"menu\"]"));
         assert!(INSTALL_SCRIPT.contains("[role=\"menu\"]"));
+        assert!(INSTALL_SCRIPT.contains("[data-radix-menu-content]"));
+        assert!(INSTALL_SCRIPT.contains("[role=\"dialog\"]"));
+        assert!(INSTALL_SCRIPT.contains("[role=\"listbox\"]"));
+        assert!(INSTALL_SCRIPT.contains("bg-token-dropdown-background"));
+        assert!(INSTALL_SCRIPT.contains("var(--codeskin-sidebar-elevated-opacity)"));
+        assert!(INSTALL_SCRIPT.contains("var(--codeskin-sidebar-blur)"));
+        assert!(INSTALL_SCRIPT.contains("var(--codeskin-info-elevated-opacity)"));
+        assert!(INSTALL_SCRIPT.contains("var(--codeskin-info-blur)"));
+        assert!(INSTALL_SCRIPT.contains("[data-highlighted]"));
+        assert!(INSTALL_SCRIPT.contains("::placeholder"));
+        assert!(INSTALL_SCRIPT.contains(":disabled"));
         assert!(INSTALL_SCRIPT.contains("aria-expanded"));
         assert!(INSTALL_SCRIPT.contains("data-state"));
-        assert!(!INSTALL_SCRIPT
-            .contains(":root[data-codeskin-theme-id] [role=\"menu\"] {\n  background"));
     }
     #[test]
     fn payload_json_escapes_theme_values() {
@@ -116,11 +126,12 @@ mod tests {
         assert!(!INSTALL_SCRIPT.contains("WINDOWS_ABSOLUTE_PATH"));
     }
     #[test]
-    fn mode_observer_coalesces_updates_and_defaults_incomplete_dom_to_focus() {
+    fn mode_observer_coalesces_updates_and_uses_working_content_as_focus_signal() {
         assert!(INSTALL_SCRIPT.contains("queueMicrotask"));
         assert!(INSTALL_SCRIPT.contains("root.getAttribute(modeAttribute) !== mode"));
-        assert!(INSTALL_SCRIPT.contains("hasMain && hasWelcomeSurface && !hasWorkingSurface"));
-        assert!(INSTALL_SCRIPT.contains(": \"focus\""));
+        assert!(INSTALL_SCRIPT.contains("hasMain && !hasTranscript && !hasCode"));
+        assert!(INSTALL_SCRIPT.contains("? \"ambient\" : \"focus\""));
+        assert!(!INSTALL_SCRIPT.contains("hasWelcomeSurface"));
     }
     #[test]
     fn observer_global_is_owned_by_the_runtime_record() {

@@ -162,7 +162,7 @@ const theme = {
     },
     content: {
       foreground: "#172033", muted: "#536174", panelColor: "#F7F4EE",
-      panelOpacity: 0.18, blurPx: 8, textShadow: "0 1px 2px rgba(255,255,255,0.4)"
+      panelOpacity: 0.18, blurPx: 8, textShadow: "0 1px 2px rgba(255,255,255,0.44)"
     },
     header: {
       foreground: "#263744", muted: "#52616D", panelColor: "#F7F4EE",
@@ -347,104 +347,416 @@ const cssRule = (css, selector) => {
   return css.slice(start, end + 2);
 };
 
-const injectedSurfaceKeepsWallpaperSharpAndOnlyComposerGlass = () => {
+const hexToRgb = (hex) => [1, 3, 5].map((index) => Number.parseInt(hex.slice(index, index + 2), 16));
+const blendRgb = (foreground, background, opacity) => foreground.map(
+  (channel, index) => Math.round(channel * opacity + background[index] * (1 - opacity))
+);
+const relativeLuminance = (rgb) => {
+  const linear = rgb.map((channel) => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+};
+const contrastRatio = (left, right) => {
+  const l1 = relativeLuminance(left);
+  const l2 = relativeLuminance(right);
+  return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+};
+const cssVariable = (css, name) => {
+  const match = css.match(new RegExp(`--${name}:\\s*([^;]+);`));
+  assert.ok(match, `expected CSS variable --${name}`);
+  return match[1].trim();
+};
+
+const injectedSurfacesUseRegionalGlassWithoutGlassingTranscript = () => {
   const { document, context } = createLiveContext();
   const install = run(`(${installSource})`, context);
 
   assert.equal(install(theme).active, true);
   const css = document.getElementById("codeskin-runtime-style").textContent;
+  const wallpaperVeilRule = cssRule(
+    css,
+    '#codeskin-wallpaper-layer[data-codeskin-owned="true"][data-codeskin-layer="wallpaper"][data-codeskin-runtime="codeskin-runtime-v1"]::after'
+  );
   const mainSurfaceRule = cssRule(css, ":root[data-codeskin-theme-id] .main-surface");
-  const headerRule = cssRule(css, ":root[data-codeskin-theme-id] .app-header-tint");
   const sidebarRule = cssRule(css, ":root[data-codeskin-theme-id] .app-shell-left-panel");
   const composerRule = cssRule(css, ":root[data-codeskin-theme-id] .composer-surface-chrome");
 
-  assert.match(css, /--codeskin-secondary: #BB9AF7;/);
+  assert.equal(cssVariable(css, "codeskin-ambient-overlay-opacity"), "0.12");
+  assert.equal(cssVariable(css, "codeskin-focus-overlay-opacity"), "0.18");
+  assert.equal(cssVariable(css, "codeskin-sidebar-panel-color"), theme.contrast.sidebar.panelColor);
+  assert.equal(cssVariable(css, "codeskin-sidebar-panel-opacity"), String(theme.contrast.sidebar.panelOpacity));
+  assert.equal(cssVariable(css, "codeskin-sidebar-blur"), `${theme.contrast.sidebar.blurPx}px`);
+  assert.equal(cssVariable(css, "codeskin-content-panel-color"), theme.contrast.content.panelColor);
+  assert.equal(cssVariable(css, "codeskin-content-panel-opacity"), String(theme.contrast.content.panelOpacity));
+  assert.equal(cssVariable(css, "codeskin-content-text-shadow"), theme.contrast.content.textShadow);
+  assert.equal(cssVariable(css, "codeskin-info-panel-color"), theme.contrast.infoPanel.panelColor);
+  assert.equal(cssVariable(css, "codeskin-composer-panel-color"), theme.contrast.composer.panelColor);
+  assert.equal(cssVariable(css, "codeskin-composer-panel-opacity"), String(theme.contrast.composer.panelOpacity));
+  assert.doesNotMatch(css, /#11151C|--codeskin-glass-color|--codeskin-glass-base-opacity/);
+  assert.ok(Number(cssVariable(css, "codeskin-ambient-overlay-opacity")) <= 0.14);
+  assert.ok(Number(cssVariable(css, "codeskin-focus-overlay-opacity")) <= 0.22);
+  assert.match(wallpaperVeilRule, /opacity: var\(--codeskin-current-overlay-opacity\);/);
+  assert.match(wallpaperVeilRule, /background: var\(--codeskin-wallpaper-veil\);/);
+
   assert.match(mainSurfaceRule, /background: transparent !important;/);
   assert.match(mainSurfaceRule, /backdrop-filter: none !important;/);
   assert.doesNotMatch(mainSurfaceRule, /backdrop-filter: blur/);
-  assert.match(css, /--codeskin-sidebar-foreground: #F4F7FF;/);
-  assert.match(css, /--codeskin-content-foreground: #172033;/);
-  assert.match(css, /--codeskin-header-foreground: #263744;/);
-  assert.match(css, /--codeskin-header-muted-foreground: #52616D;/);
-  assert.match(css, /--codeskin-info-foreground: #F4F7FF;/);
-  assert.match(css, /text-shadow: var\(--codeskin-sidebar-text-shadow\) !important;/);
-  assert.match(css, /text-shadow: var\(--codeskin-content-text-shadow\) !important;/);
-  assert.match(css, /text-shadow: var\(--codeskin-info-text-shadow\) !important;/);
+  assert.match(sidebarRule, /var\(--codeskin-sidebar-panel-color\)/);
+  assert.match(sidebarRule, /var\(--codeskin-sidebar-panel-opacity\)/);
+  assert.match(sidebarRule, /backdrop-filter: blur\(var\(--codeskin-sidebar-blur\)\)/);
+  assert.match(sidebarRule, /color: var\(--codeskin-sidebar-foreground\) !important;/);
+  assert.match(composerRule, /var\(--codeskin-composer-panel-color\)/);
+  assert.match(composerRule, /var\(--codeskin-composer-panel-opacity\)/);
+  assert.match(composerRule, /backdrop-filter: blur\(var\(--codeskin-composer-blur\)\)/);
+  assert.match(composerRule, /color: var\(--codeskin-composer-foreground\) !important;/);
 
-  assert.match(composerRule, /backdrop-filter: blur\(var\(--codeskin-composer-blur\)\) saturate\(112%\);/);
-  assert.match(composerRule, /background-color: color-mix/);
-  assert.match(composerRule, /box-shadow:/);
-  for (const rule of [headerRule, sidebarRule]) {
-    assert.match(rule, /background: transparent !important;/);
-    assert.doesNotMatch(rule, /(?:background-color:|border(?:-color)?:|backdrop-filter: blur|box-shadow:)/);
-  }
   assert.match(
     css,
     /\[class\*="_markdownContent_"\][\s\S]*?background: transparent !important;/,
-    "chat and code wrappers must be explicitly transparent rather than inheriting an opaque Codex surface"
+    "chat and code wrappers must stay transparent"
   );
-  assert.match(
+  assert.doesNotMatch(
     css,
-    /\[class\*="bg-token-foreground\/5"\][\s\S]*?background: transparent !important;/,
-    "environment information must be explicitly transparent rather than a glass card"
+    /\.main-surface\s*\{[^}]*--codeskin-(?:content|info|sidebar)-panel-opacity/s,
+    "the main transcript surface must not become one giant glass panel"
   );
-  assert.doesNotMatch(css, /--codeskin-(?:sidebar|content|info)-panel-(?:color|opacity)/);
-  assert.doesNotMatch(css, /--codeskin-(?:sidebar|content|info)-blur/);
-  assert.doesNotMatch(css, /\[role="dialog"\]|\[role="listbox"\]/);
-  assert.doesNotMatch(css, /:root\[data-codeskin-theme-id\] button,/);
 };
 
-const textRegionsUsePerImageContrastWithoutGlassPanels = () => {
+const elevatedMenusDialogsAndSettingsUseRegionalReadableGlass = () => {
   const { document, context } = createLiveContext();
   const install = run(`(${installSource})`, context);
 
   assert.equal(install(theme).active, true);
   const css = document.getElementById("codeskin-runtime-style").textContent;
+  const menuRule = cssRule(
+    css,
+    ':root[data-codeskin-theme-id] :is([role="menu"], [data-radix-menu-content])'
+  );
+  const elevatedRule = cssRule(
+    css,
+    ':root[data-codeskin-theme-id] :is([role="dialog"], [role="listbox"], [data-radix-popover-content], [data-radix-select-content], [class*="bg-token-dropdown-background"])'
+  );
+  const menuItemRule = cssRule(
+    css,
+    ':root[data-codeskin-theme-id] :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]):is(:hover, :focus-visible, [data-highlighted])'
+  );
+  const ambientCardRule = cssRule(
+    css,
+    ':root[data-codeskin-theme-id][data-codeskin-mode="ambient"] .main-surface [class~="group/home-suggestions"] button[class*="bg-token-main-surface-primary"]'
+  );
+  const settingsRule = cssRule(
+    css,
+    ':root[data-codeskin-theme-id][data-codeskin-mode="ambient"] .main-surface :is([class*="bg-token-main-surface-primary"], [class*="bg-token-main-surface-secondary"], [class*="bg-token-dropdown-background"])'
+  );
 
-  assert.match(css, /\.app-shell-left-panel :is\([\s\S]*?color: var\(--codeskin-sidebar-foreground\) !important;/);
-  assert.match(css, /\.main-surface :is\([\s\S]*?color: var\(--codeskin-content-foreground\) !important;/);
-  assert.match(css, /\[class\*="bg-token-foreground\/5"\] :is\([\s\S]*?color: var\(--codeskin-info-foreground\) !important;/);
-  assert.doesNotMatch(css, /--codeskin-(?:sidebar|content|info)-panel-(?:color|opacity)/);
-  assert.doesNotMatch(css, /--codeskin-(?:sidebar|content|info)-blur/);
+  assert.match(menuRule, /var\(--codeskin-sidebar-panel-color\)/);
+  assert.match(menuRule, /var\(--codeskin-sidebar-elevated-opacity\)/);
+  assert.match(menuRule, /backdrop-filter: blur\(var\(--codeskin-sidebar-blur\)\)/);
+  assert.match(menuRule, /color: var\(--codeskin-sidebar-foreground\) !important;/);
+  assert.match(elevatedRule, /var\(--codeskin-info-panel-color\)/);
+  assert.match(elevatedRule, /var\(--codeskin-info-elevated-opacity\)/);
+  assert.match(elevatedRule, /backdrop-filter: blur\(var\(--codeskin-info-blur\)\)/);
+  assert.match(elevatedRule, /color: var\(--codeskin-info-foreground\) !important;/);
+  assert.match(menuItemRule, /background-color: color-mix/);
+  assert.match(menuItemRule, /transparent\) !important;/);
+  assert.match(ambientCardRule, /var\(--codeskin-content-panel-opacity\)/);
+  assert.match(ambientCardRule, /color: var\(--codeskin-content-foreground\) !important;/);
+  assert.match(settingsRule, /var\(--codeskin-content-panel-opacity\)/);
+  assert.match(settingsRule, /color: var\(--codeskin-content-foreground\) !important;/);
+  assert.match(css, /::placeholder[\s\S]*?color: var\(--codeskin-[a-z-]+-muted\) !important;/);
+  assert.match(css, /:disabled[\s\S]*?color: var\(--codeskin-[a-z-]+-muted\) !important;/);
 };
 
-const environmentInfoAndTopMenusUseContrastWithoutChangingTheirSurfaces = () => {
+const settingsCardsAndFogControlsUseRegionalAmbientGlass = () => {
   const { document, context } = createLiveContext();
   const install = run(`(${installSource})`, context);
 
   assert.equal(install(theme).active, true);
   const css = document.getElementById("codeskin-runtime-style").textContent;
-  const environmentRule = cssRule(
+  const settingsCardSelector = ':root[data-codeskin-theme-id][data-codeskin-mode="ambient"] .main-surface [class~="overflow-hidden"][class~="rounded-2xl"][class~="border-token-border"]';
+  const settingsCardRule = cssRule(css, settingsCardSelector);
+  const settingsDividerRule = cssRule(css, `${settingsCardSelector} > *::after`);
+  const fogControlRule = cssRule(
     css,
-    ':root[data-codeskin-theme-id] [class*="bg-token-dropdown-background"]:has([class~="group/summary-panel-item"])'
+    ':root[data-codeskin-theme-id][data-codeskin-mode="ambient"] .main-surface [class~="bg-token-bg-fog"]'
   );
-  const toolbarRule = cssRule(
+  const fogControlInteractiveRule = cssRule(
     css,
-    ':root[data-codeskin-theme-id] .app-header-tint[class*="application-menu-top-bar"]\nbutton.no-drag[aria-haspopup="menu"]'
+    ':root[data-codeskin-theme-id][data-codeskin-mode="ambient"] .main-surface [class~="bg-token-bg-fog"]:is(:hover, :focus-visible, [data-state="open"])'
   );
-  const menuRule = cssRule(css, ':root[data-codeskin-theme-id] [role="menu"]');
 
-  // The user-facing "审阅 / 终端 / 浏览器 / 文件 / 侧边任务" entries live in
-  // .main-surface and are covered by its native token-text rule, rather than by
-  // the top-level trigger selector above.
+  assert.match(settingsCardRule, /color: var\(--codeskin-content-foreground\) !important;/);
+  assert.match(settingsCardRule, /var\(--codeskin-content-panel-color\)/);
+  assert.match(settingsCardRule, /var\(--codeskin-content-panel-opacity\)/);
+  assert.match(settingsCardRule, /backdrop-filter: blur\(var\(--codeskin-content-blur\)\)/);
+  assert.match(settingsCardRule, /border-color: color-mix/);
+  assert.match(settingsCardRule, /box-shadow:/);
+  assert.doesNotMatch(settingsCardRule, /background(?:-color)?:\s*(?:rgb\(250,\s*250,\s*248\)|#[fF][aA][fF][aA][fF][8])/);
+
+  assert.match(settingsDividerRule, /background-color: color-mix/);
+  assert.match(settingsDividerRule, /var\(--codeskin-content-foreground\)/);
+
+  assert.match(fogControlRule, /color: var\(--codeskin-content-foreground\) !important;/);
+  assert.match(fogControlRule, /var\(--codeskin-content-panel-opacity\)/);
+  assert.match(fogControlRule, /border-color: color-mix/);
+  assert.match(fogControlInteractiveRule, /var\(--codeskin-content-hover-opacity\)/);
+  assert.doesNotMatch(fogControlInteractiveRule, /(?:white|#fff|rgb\(250,\s*250,\s*248\))/i);
+};
+
+const responsiveUtilitySidebarUsesContentGlassInFocusAndAmbientModes = () => {
+  const { document, context } = createLiveContext();
+  const install = run(`(${installSource})`, context);
+
+  assert.equal(install(theme).active, true);
+  const css = document.getElementById("codeskin-runtime-style").textContent;
+  const sidebarSurfaceSelector = ':root[data-codeskin-theme-id] .main-surface aside[class~="z-[41]"] [class~="bg-token-main-surface-primary"]';
+  const sidebarSurfaceRule = cssRule(css, sidebarSurfaceSelector);
+  const shortcutSelector = ':root[data-codeskin-theme-id] .main-surface aside[class~="z-[41]"] [class~="bg-token-bg-fog"]';
+  const shortcutRule = cssRule(css, shortcutSelector);
+  const shortcutInteractiveRule = cssRule(
+    css,
+    `${shortcutSelector}:is(:hover, :focus-visible, [data-state="open"])`
+  );
+
+  assert.doesNotMatch(sidebarSurfaceSelector, /data-codeskin-mode/, "utility sidebar glass must also apply while an underlying transcript keeps focus mode active");
+  assert.match(sidebarSurfaceRule, /color: var\(--codeskin-content-foreground\) !important;/);
+  assert.match(sidebarSurfaceRule, /var\(--codeskin-content-panel-color\)/);
+  assert.match(sidebarSurfaceRule, /var\(--codeskin-content-panel-opacity\)/);
+  assert.match(sidebarSurfaceRule, /backdrop-filter: blur\(var\(--codeskin-content-blur\)\)/);
+  assert.match(sidebarSurfaceRule, /text-shadow: var\(--codeskin-content-text-shadow\) !important;/);
+  assert.match(shortcutRule, /color: var\(--codeskin-content-foreground\) !important;/);
+  assert.match(shortcutRule, /var\(--codeskin-content-panel-opacity\)/);
+  assert.match(shortcutRule, /text-shadow: var\(--codeskin-content-text-shadow\) !important;/);
+  assert.match(shortcutInteractiveRule, /var\(--codeskin-content-hover-opacity\)/);
+  assert.doesNotMatch(shortcutRule, /(?:white|#fff|rgb\(250,\s*250,\s*248\))/i);
+};
+
+const userMessageBubblesUseContentGlassWithoutMatchingHoverUtilities = () => {
+  const { document, context } = createLiveContext();
+  const install = run(`(${installSource})`, context);
+
+  assert.equal(install(theme).active, true);
+  const css = document.getElementById("codeskin-runtime-style").textContent;
+  const bubbleRule = cssRule(
+    css,
+    ':root[data-codeskin-theme-id] [data-user-message-bubble="true"]'
+  );
+
+  assert.match(bubbleRule, /color: var\(--codeskin-content-foreground\) !important;/);
+  assert.match(bubbleRule, /var\(--codeskin-content-panel-color\)/);
+  assert.match(bubbleRule, /var\(--codeskin-content-panel-opacity\)/);
+  assert.match(bubbleRule, /backdrop-filter: blur\(var\(--codeskin-content-blur\)\)/);
+  assert.doesNotMatch(bubbleRule, /background: transparent !important;/);
+  assert.doesNotMatch(
+    css,
+    /:root\[data-codeskin-theme-id\] \[class\\\*="bg-token-foreground\\\/5"\]/,
+    "hover utility class fragments must not be mistaken for glass surfaces"
+  );
+};
+
+const regionalGlassTextMeetsContrastAgainstItsSampledWallpaperArea = () => {
+  const { document, context } = createLiveContext();
+  const install = run(`(${installSource})`, context);
+
+  assert.equal(install(theme).active, true);
+  const css = document.getElementById("codeskin-runtime-style").textContent;
+  assert.doesNotMatch(
+    css,
+    /text-shadow: 0 1px 3px rgba\(0,0,0,0\.72\)/,
+    "content text shadows must follow the sampled region instead of forcing a dark-only shadow"
+  );
+  const veil = hexToRgb(cssVariable(css, "codeskin-wallpaper-veil"));
+  const overlayOpacity = Number(cssVariable(css, "codeskin-ambient-overlay-opacity"));
+  const regions = {
+    sidebar: { sample: [35, 41, 47], cssPrefix: "sidebar" },
+    content: { sample: [242, 233, 220], cssPrefix: "content" },
+    infoPanel: { sample: [35, 41, 47], cssPrefix: "info" },
+    composer: { sample: [35, 41, 47], cssPrefix: "composer" }
+  };
+
+  for (const [name, { sample, cssPrefix }] of Object.entries(regions)) {
+    const region = theme.contrast[name];
+    const foreground = hexToRgb(cssVariable(css, `codeskin-${cssPrefix}-foreground`));
+    const muted = hexToRgb(cssVariable(css, `codeskin-${cssPrefix}-muted`));
+    const panel = hexToRgb(cssVariable(css, `codeskin-${cssPrefix}-panel-color`));
+    const panelOpacity = Number(cssVariable(css, `codeskin-${cssPrefix}-panel-opacity`));
+    const veiled = blendRgb(veil, sample, overlayOpacity);
+    const composite = blendRgb(panel, veiled, panelOpacity);
+
+    assert.equal(cssVariable(css, `codeskin-${cssPrefix}-foreground`), region.foreground);
+    assert.equal(cssVariable(css, `codeskin-${cssPrefix}-muted`), region.muted);
+    assert.ok(
+      contrastRatio(foreground, composite) >= 4.5,
+      `${name} normal text must reach 4.5:1 against its sampled glass composite`
+    );
+    assert.ok(
+      contrastRatio(muted, composite) >= 3,
+      `${name} muted text must reach 3:1 against its sampled glass composite`
+    );
+  }
+};
+
+const currentTaskHeaderTitleUsesReadableSampledHeaderText = () => {
+  const { document, context } = createLiveContext();
+  const install = run(`(${installSource})`, context);
+
+  assert.equal(install(theme).active, true);
+  const css = document.getElementById("codeskin-runtime-style").textContent;
+  const titleRule = cssRule(
+    css,
+    ':root[data-codeskin-theme-id] [data-testid="app-shell-header-context-menu-surface"] :is([class~="text-token-foreground"], [class~="text-token-foreground"] *)'
+  );
+  const sidebarVisibilityToggleSelector = ':root[data-codeskin-theme-id] .app-header-tint button[aria-pressed][class~="aspect-square"][class~="text-token-foreground"][class~="bg-token-foreground/5"]';
+  const sidebarVisibilityToggleRule = cssRule(css, sidebarVisibilityToggleSelector);
+  const sidebarVisibilityToggleInteractiveRule = cssRule(
+    css,
+    `${sidebarVisibilityToggleSelector}:is(:hover, :focus-visible, [aria-pressed="true"])`
+  );
+
+  assert.match(titleRule, /color: var\(--codeskin-header-foreground\) !important;/);
+  assert.match(titleRule, /text-shadow: var\(--codeskin-header-text-shadow\) !important;/);
+  assert.doesNotMatch(sidebarVisibilityToggleSelector, /aria-label/, "selector must remain locale-independent");
+  assert.match(sidebarVisibilityToggleRule, /color: var\(--codeskin-header-icon-foreground\) !important;/);
+  assert.match(sidebarVisibilityToggleRule, /var\(--codeskin-header-foreground\)/);
+  assert.match(sidebarVisibilityToggleRule, /text-shadow: var\(--codeskin-header-text-shadow\) !important;/);
+  assert.match(sidebarVisibilityToggleInteractiveRule, /var\(--codeskin-header-foreground\)/);
+  assert.doesNotMatch(sidebarVisibilityToggleRule, /(?:white|#fff|rgb\(250,\s*250,\s*248\))/i);
+};
+
+const openLocationButtonGroupUsesSampledHeaderGlassWithoutLocaleSelectors = () => {
+  const { document, context } = createLiveContext();
+  const install = run(`(${installSource})`, context);
+
+  assert.equal(install(theme).active, true);
+  const css = document.getElementById("codeskin-runtime-style").textContent;
+  const buttonSelector = ':root[data-codeskin-theme-id] [data-testid="app-shell-header-context-menu-surface"] div[class~="inline-flex"][class~="items-stretch"][class~="overflow-hidden"][class~="rounded-lg"] button[class~="border-token-border"][class~="text-token-button-tertiary-foreground"][class~="bg-token-bg-fog"]:is([class~="rounded-r-none"], [class~="rounded-l-none"])';
+  const buttonRule = cssRule(css, buttonSelector);
+  const interactiveRule = cssRule(css, `${buttonSelector}:is(:hover, :focus-visible, [data-state="open"])`);
+  const arrowRule = cssRule(css, `${buttonSelector} svg[class~="opacity-50"]`);
+  assert.notEqual(css.indexOf(`@layer base {\n${buttonSelector} {`), -1, "layered rule must beat Codex !border-token-border");
+
+  assert.equal(cssVariable(css, "codeskin-header-panel-color"), theme.contrast.header.panelColor);
+  assert.equal(cssVariable(css, "codeskin-header-panel-opacity"), String(theme.contrast.header.panelOpacity));
+  assert.equal(cssVariable(css, "codeskin-header-blur"), `${theme.contrast.header.blurPx}px`);
+  assert.doesNotMatch(buttonSelector, /data-codeskin-mode|aria-label|打开位置|次要操作/);
+  assert.match(buttonRule, /color: var\(--codeskin-header-foreground\) !important;/);
+  assert.match(buttonRule, /var\(--codeskin-header-panel-color\)/);
+  assert.match(buttonRule, /var\(--codeskin-header-panel-opacity\)/);
+  assert.match(buttonRule, /backdrop-filter: blur\(var\(--codeskin-header-blur\)\)/);
+  assert.match(buttonRule, /text-shadow: var\(--codeskin-header-text-shadow\) !important;/);
+  assert.match(interactiveRule, /var\(--codeskin-header-hover-opacity\)/);
+  assert.match(arrowRule, /color: var\(--codeskin-header-foreground\) !important;/);
+  assert.match(arrowRule, /opacity: 0\.82 !important;/);
+  assert.doesNotMatch(buttonRule, /(?:white|#fff|rgb\(250,\s*250,\s*248\))/i);
+  assert.doesNotMatch(css, /\.main-surface\s+svg\s*\{/);
+};
+
+const activitySummaryTrailingUsesReadableMutedColorWithoutGlobalSvgOverride = () => {
+  const { document, context } = createLiveContext();
+  const install = run(`(${installSource})`, context);
+
+  assert.equal(install(theme).active, true);
+  const css = document.getElementById("codeskin-runtime-style").textContent;
+  const summaryRule = cssRule(
+    css,
+    ':root[data-codeskin-theme-id] body #root .main-surface [class~="group/activity-header"] [class*="text-token-conversation-summary"]'
+  );
+  const currentProcessedStatusRule = cssRule(
+    css,
+    ':root[data-codeskin-theme-id] body #root .main-surface button[aria-expanded] [class~="text-token-conversation-body"]'
+  );
+
   assert.match(
     css,
-    /:root\[data-codeskin-theme-id\] \.main-surface :is\([\s\S]*?\[class\*="text-token-text-primary"\][\s\S]*?color: var\(--codeskin-content-foreground\) !important;/
+    /@layer base \{[\s\S]*?:root\[data-codeskin-theme-id\] body #root \.main-surface \[class~="group\/activity-header"\] \[class\*="text-token-conversation-summary"\]/
   );
+  assert.match(summaryRule, /color: var\(--codeskin-content-muted\) !important;/);
+  assert.match(summaryRule, /text-shadow: var\(--codeskin-content-text-shadow\) !important;/);
+  assert.match(currentProcessedStatusRule, /color: var\(--codeskin-content-muted\) !important;/);
+  assert.match(currentProcessedStatusRule, /text-shadow: var\(--codeskin-content-text-shadow\) !important;/);
+  assert.match(
+    css,
+    /\[class~="group\/activity-header"\] :is\(\[class\*="text-token-conversation-body"\], \[class\*="text-token-conversation-body"\] :is\(span, p, label, svg\)\)[\s\S]*?color: var\(--codeskin-content-muted\) !important;/,
+    "nested activity text and currentColor icons must not fall back to Codex dark utility colours"
+  );
+  assert.doesNotMatch(
+    css,
+    /:root\[data-codeskin-theme-id\] \.main-surface svg\s*\{/,
+    "activity icon readability must not introduce a global SVG override"
+  );
+};
 
-  assert.match(environmentRule, /color: var\(--codeskin-info-foreground\) !important;/);
-  assert.match(environmentRule, /text-shadow: var\(--codeskin-info-text-shadow\) !important;/);
-  assert.doesNotMatch(environmentRule, /(?:background(?:-color)?:|border(?:-color)?:|backdrop-filter|box-shadow:)/);
+const directWallpaperTextUsesSampledRegionalContrastWithLightOverlays = () => {
+  const { document, context } = createLiveContext();
+  const install = run(`(${installSource})`, context);
 
-  assert.match(toolbarRule, /color: var\(--codeskin-header-foreground\) !important;/);
-  assert.match(toolbarRule, /text-shadow: var\(--codeskin-header-text-shadow\) !important;/);
-  assert.doesNotMatch(toolbarRule, /--codeskin-content-foreground/);
-  assert.doesNotMatch(toolbarRule, /(?:background(?:-color)?:|border(?:-color)?:|backdrop-filter|box-shadow:)/);
+  assert.equal(install(theme).active, true);
+  const css = document.getElementById("codeskin-runtime-style").textContent;
+  const veil = hexToRgb(cssVariable(css, "codeskin-wallpaper-veil"));
+  const overlays = {
+    ambient: Number(cssVariable(css, "codeskin-ambient-overlay-opacity")),
+    focus: Number(cssVariable(css, "codeskin-focus-overlay-opacity"))
+  };
+  const regions = {
+    content: { sample: [242, 233, 220], prefix: "content" },
+    header: { sample: [242, 233, 220], prefix: "header", mutedName: "header-muted-foreground" }
+  };
 
-  assert.match(menuRule, /color: var\(--codeskin-content-foreground\) !important;/);
-  assert.match(menuRule, /text-shadow: var\(--codeskin-content-text-shadow\) !important;/);
-  assert.doesNotMatch(menuRule, /(?:background(?:-color)?:|border(?:-color)?:|backdrop-filter|box-shadow:)/);
+  assert.ok(overlays.ambient <= 0.14, "ambient overlay must remain visually light");
+  assert.ok(overlays.focus <= 0.22, "focus overlay must remain visually light");
+  for (const [name, { sample, prefix, mutedName }] of Object.entries(regions)) {
+    const expected = theme.contrast[name];
+    const foregroundName = `${prefix}-foreground`;
+    const resolvedMutedName = mutedName ?? `${prefix}-muted`;
+    const foreground = hexToRgb(cssVariable(css, `codeskin-${foregroundName}`));
+    const muted = hexToRgb(cssVariable(css, `codeskin-${resolvedMutedName}`));
+    assert.equal(cssVariable(css, `codeskin-${foregroundName}`), expected.foreground);
+    assert.equal(cssVariable(css, `codeskin-${resolvedMutedName}`), expected.muted);
 
+    for (const [mode, overlayOpacity] of Object.entries(overlays)) {
+      const composite = blendRgb(veil, sample, overlayOpacity);
+      assert.ok(contrastRatio(foreground, composite) >= 4.5, `${mode} ${name} normal text must reach 4.5:1`);
+      assert.ok(contrastRatio(muted, composite) >= 3, `${mode} ${name} muted text must reach 3:1`);
+    }
+  }
+};
+
+const welcomeWithoutBrittleMarkerUsesAmbientModeAndChatUsesFocusMode = () => {
+  const welcome = createLiveContext();
+  welcome.document.querySelector = (selector) => {
+    if (selector === "main, [role='main']") return {};
+    if (selector === "textarea, [contenteditable='true'], [role='textbox']") return {};
+    return null;
+  };
+  const welcomeInstall = run(`(${installSource})`, welcome.context);
+  assert.equal(welcomeInstall(theme).mode, "ambient");
+
+  const chat = createLiveContext();
+  chat.document.querySelector = (selector) => {
+    if (selector === "main, [role='main']") return {};
+    if (selector === "textarea, [contenteditable='true'], [role='textbox']") return {};
+    if (selector === "[role='log'], [data-message-author-role]") return {};
+    return null;
+  };
+  const chatInstall = run(`(${installSource})`, chat.context);
+  assert.equal(chatInstall(theme).mode, "focus");
+
+  const currentCodexChat = createLiveContext();
+  currentCodexChat.document.querySelector = (selector) => {
+    if (selector === "main, [role='main']") return {};
+    if (selector === "[data-thread-find-target='conversation'], [data-user-message-bubble='true']") return {};
+    return null;
+  };
+  const currentCodexChatInstall = run(`(${installSource})`, currentCodexChat.context);
+  assert.equal(currentCodexChatInstall(theme).mode, "focus");
+};
+
+const observerTracksPortalAndModeAttributes = () => {
+  const { context } = createLiveContext();
+  const install = run(`(${installSource})`, context);
+  assert.equal(install(theme).active, true);
   const observerOptions = context.window.__codeskinRuntime.observer.observed[0].options;
   assert.equal(observerOptions.childList, true);
   assert.equal(observerOptions.subtree, true);
@@ -461,7 +773,16 @@ foreignObserverRemainsAndInstallFailsClosed();
 repeatInstallReplacesOnlyItsOwnObserver();
 restoreDoesNotDeleteOrDisconnectAForeignObserver();
 verifyFailsClosedWhenObserverGlobalDoesNotMatchRuntime();
-injectedSurfaceKeepsWallpaperSharpAndOnlyComposerGlass();
-textRegionsUsePerImageContrastWithoutGlassPanels();
-environmentInfoAndTopMenusUseContrastWithoutChangingTheirSurfaces();
+injectedSurfacesUseRegionalGlassWithoutGlassingTranscript();
+elevatedMenusDialogsAndSettingsUseRegionalReadableGlass();
+settingsCardsAndFogControlsUseRegionalAmbientGlass();
+responsiveUtilitySidebarUsesContentGlassInFocusAndAmbientModes();
+userMessageBubblesUseContentGlassWithoutMatchingHoverUtilities();
+regionalGlassTextMeetsContrastAgainstItsSampledWallpaperArea();
+currentTaskHeaderTitleUsesReadableSampledHeaderText();
+openLocationButtonGroupUsesSampledHeaderGlassWithoutLocaleSelectors();
+activitySummaryTrailingUsesReadableMutedColorWithoutGlobalSvgOverride();
+directWallpaperTextUsesSampledRegionalContrastWithLightOverlays();
+welcomeWithoutBrittleMarkerUsesAmbientModeAndChatUsesFocusMode();
+observerTracksPortalAndModeAttributes();
 console.log("injection runtime behavior tests passed");
