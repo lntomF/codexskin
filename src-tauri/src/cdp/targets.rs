@@ -22,6 +22,16 @@ struct RawTarget {
     websocket_debugger_url: Option<String>,
 }
 
+fn is_avatar_overlay_url(url: &str) -> bool {
+    let normalized = url.to_ascii_lowercase();
+    normalized.contains("initialroute=%2favatar-overlay")
+        || normalized.contains("initialroute=/avatar-overlay")
+}
+
+fn is_injectable_target(target: &RawTarget) -> bool {
+    target.target_type == "page" && !is_avatar_overlay_url(&target.url)
+}
+
 pub async fn discover_page_targets(port: u16) -> Result<Vec<PageTarget>, CommandError> {
     let raw_targets: Vec<RawTarget> =
         serde_json::from_value(get_local_json(port, "/json/list").await?)
@@ -29,7 +39,7 @@ pub async fn discover_page_targets(port: u16) -> Result<Vec<PageTarget>, Command
 
     raw_targets
         .into_iter()
-        .filter(|target| target.target_type == "page")
+        .filter(is_injectable_target)
         .filter_map(|target| {
             let websocket_url = target.websocket_debugger_url.clone()?;
             Some((target, websocket_url))
@@ -69,7 +79,22 @@ mod live_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::RawTarget;
+    use super::{is_injectable_target, RawTarget};
+
+    #[test]
+    fn excludes_avatar_overlay_but_keeps_the_main_codex_page() {
+        let avatar_overlay: RawTarget = serde_json::from_str(
+            r#"{"id":"avatar","type":"page","url":"app://-/index.html?initialRoute=%2Favatar-overlay","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/page/avatar"}"#,
+        )
+        .expect("avatar target should deserialize");
+        let main_page: RawTarget = serde_json::from_str(
+            r#"{"id":"main","type":"page","url":"app://-/index.html","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/page/main"}"#,
+        )
+        .expect("main target should deserialize");
+
+        assert!(!is_injectable_target(&avatar_overlay));
+        assert!(is_injectable_target(&main_page));
+    }
 
     #[test]
     fn parses_chromium_web_socket_debugger_url_spelling() {
