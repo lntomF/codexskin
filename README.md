@@ -58,7 +58,7 @@
     </td>
     <td width="50%">
       <img src="readme-image/AC/k2.png" alt="真机截图：K2" style="max-width:100%; border-radius: 8px;" />
-      <img src="readme-image/AC/K1.png" alt="真机截图：K1 " style="max-width:100%; border-radius: 8px;" />
+      <img src="readme-image/AC/K1.png" alt="真机截图：K1 " style="max-width:100%; border-radius: 8px; margin-top: 8px;" />
     </td>
   </tr>
   <!-- 第二行：标题 -->
