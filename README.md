@@ -1,5 +1,7 @@
 # CodeSkin
 
+English version: [README_EN.md](README_EN.md)
+
 **为你的 Codex 桌面端，披上一件随呼吸律动的数字化外衣。**
 
 - **动态视觉美学**：打破死板的暗黑/明亮模式，为 Codex 注入会呼吸的动效与精巧的图层微动，让生产力工具兼具艺术感。
