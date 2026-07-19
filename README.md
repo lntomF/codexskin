@@ -39,22 +39,60 @@
 - **来去自如的切换**：喜欢就用，厌了就换。一键卸载皮肤层，秒回官方初始状态。
 - **严苛的安全防线**：注入通道仅对内（127.0.0.1）开放，不给外部网络留任何漏洞，守护你的数据安全。
 
-## 实际效果
+## 实际效果展示
 
-> **真机实测**：侧栏、输入框、建议卡均为 Codex 原生控件，可正常点击。
+> 🎨 如需获取背景图或更多素材，可前往 [readme-image 目录](https://github.com/lntomF/codexskin/tree/main/readme-image) 查找。
 
-<p align="center">
-  <marquee direction="left" scrollamount="10" onmouseover="this.stop()" onmouseout="this.start()">
-    <img src="readme-image/AC/h1.png" height="350px" style="margin-right: 15px; border-radius: 8px;" />
-    <img src="readme-image/AC/h2.png" height="350px" style="margin-right: 15px; border-radius: 8px;" />
-    <img src="readme-image/AC/m1.png" height="350px" style="margin-right: 15px; border-radius: 8px;" />
-    <img src="readme-image/AC/m2.png" height="350px" style="margin-right: 15px; border-radius: 8px;" />
-    <img src="readme-image/AC/y1.png" height="350px" style="margin-right: 15px; border-radius: 8px;" />
-    <img src="readme-image/AC/K1.png" height="350px" style="margin-right: 15px; border-radius: 8px;" />
-    <img src="readme-image/AC/K2.png" height="350px" style="margin-right: 15px; border-radius: 8px;" />
-    <img src="readme-image/AC/UI1.png" height="350px" style="margin-right: 15px; border-radius: 8px;" />
-  </marquee>
-</p>
+> **真机实测**：下面全部为真机截图，其中侧栏、输入框、建议卡均为 **Codex 原生控件**，支持完整交互，可正常点击。
+<table align="center">
+  <!-- 第一行：标题 -->
+  <tr align="center" style="font-weight: bold; background-color: transparent;">
+    <td>⚡ UI </td>
+    <td>✨ Kimjiwon</td>
+  </tr>
+  <!-- 第一行：图片 -->
+  <tr align="center">
+    <td width="50%">
+      <img src="readme-image/AC/UI2.png" alt="真机截图：UI2" style="max-width:100%; border-radius: 8px;" />
+      <img src="readme-image/AC/UI1.png" alt="真机截图：UI1" style="max-width:100%; border-radius: 8px;" />
+    </td>
+    <td width="50%">
+      <img src="readme-image/AC/k2.png" alt="真机截图：K2" style="max-width:100%; border-radius: 8px;" />
+      <img src="readme-image/AC/K2.png" alt="真机截图：K2-2" style="max-width:100%; border-radius: 8px; margin-top: 8px;" />
+    </td>
+  </tr>
+  <!-- 第二行：标题 -->
+  <tr align="center" style="font-weight: bold; background-color: transparent;">
+    <td>  韩立  </td>
+    <td>  慕沛灵  </td>
+  </tr>
+  <!-- 第二行：图片 -->
+  <tr align="center">
+    <td width="50%">
+      <img src="readme-image/AC/h1.png" alt="真机截图：H1" style="max-width:100%; border-radius: 8px;" />
+      <img src="readme-image/AC/h2.png" alt="真机截图：H2" style="max-width:100%; border-radius: 8px; margin-top: 8px;" />
+    </td>
+    <td width="50%">
+      <img src="readme-image/AC/m1.png" alt="真机截图：M1" style="max-width:100%; border-radius: 8px;" />
+      <img src="readme-image/AC/m2.png" alt="真机截图：M2" style="max-width:100%; border-radius: 8px; margin-top: 8px;" />
+    </td>
+  </tr>
+  <tr align="center" style="font-weight: bold; background-color: transparent;">
+    <td>雨姐</td>
+    <td>KUN</td>
+  </tr>
+  <!-- 第三行：图片 -->
+  <tr align="center">
+    <td width="50%">
+      <img src="readme-image/AC/y1.png" alt="真机截图：Y1" style="max-width:100%; border-radius: 8px;" />
+      <img src="readme-image/AC/y2.png" alt="真机截图：Y2" style="max-width:100%; border-radius: 8px;" />
+    </td>
+    <td width="50%">
+      <img src="readme-image/AC/ku1.png" alt="真机截图：K1" style="max-width:100%; border-radius: 8px;" />
+      <img src="readme-image/AC/ku2.png" alt="真机截图：K2" style="max-width:100%; border-radius: 8px; margin-top: 8px;" />
+    </td>
+  </tr>
+</table>
 
 ## 快速开始
 
