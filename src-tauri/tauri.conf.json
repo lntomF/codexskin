@@ -39,7 +39,7 @@
     ],
     "windows": {
       "webviewInstallMode": {
-        "type": "offlineInstaller",
+        "type": "embedBootstrapper",
         "silent": true
       },
       "allowDowngrades": false,
