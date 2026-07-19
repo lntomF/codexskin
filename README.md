@@ -39,17 +39,22 @@
 - **来去自如的切换**：喜欢就用，厌了就换。一键卸载皮肤层，秒回官方初始状态。
 - **严苛的安全防线**：注入通道仅对内（127.0.0.1）开放，不给外部网络留任何漏洞，守护你的数据安全。
 
-## 他的效果是这样的
+## 实际效果
 
-下面全部是真机截图，侧栏、输入框、建议卡都是 Codex 原生控件，可以正常点。
+> **真机实测**：侧栏、输入框、建议卡均为 Codex 原生控件，可正常点击。
 
-| UI | Kimjiwon |
-| --- | --- |
-| ![真机截图：UI1](readme-image/AC/UI1.png) | ![真机截图：H1](readme-image/AC/k2.png) |
-
-| 韩立 | 慕沛灵 |
-| --- | --- |
-| ![真机截图：K1](readme-image/AC/h1.png) | ![真机截图：M1](readme-image/AC/m1.png) |
+<p align="center">
+  <marquee direction="left" scrollamount="10" onmouseover="this.stop()" onmouseout="this.start()">
+    <img src="readme-image/AC/h1.png" height="350px" style="margin-right: 15px; border-radius: 8px;" />
+    <img src="readme-image/AC/h2.png" height="350px" style="margin-right: 15px; border-radius: 8px;" />
+    <img src="readme-image/AC/m1.png" height="350px" style="margin-right: 15px; border-radius: 8px;" />
+    <img src="readme-image/AC/m2.png" height="350px" style="margin-right: 15px; border-radius: 8px;" />
+    <img src="readme-image/AC/y1.png" height="350px" style="margin-right: 15px; border-radius: 8px;" />
+    <img src="readme-image/AC/K1.png" height="350px" style="margin-right: 15px; border-radius: 8px;" />
+    <img src="readme-image/AC/K2.png" height="350px" style="margin-right: 15px; border-radius: 8px;" />
+    <img src="readme-image/AC/UI1.png" height="350px" style="margin-right: 15px; border-radius: 8px;" />
+  </marquee>
+</p>
 
 ## 快速开始
 
