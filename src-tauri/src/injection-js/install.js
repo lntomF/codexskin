@@ -153,14 +153,13 @@
 
   const computeMode = () => {
     const hasMain = Boolean(document.querySelector("main, [role='main']"));
-    const hasComposer = Boolean(document.querySelector("textarea, [contenteditable='true'], [role='textbox']"));
-    const hasTranscript = Boolean(document.querySelector("[role='log'], [data-message-author-role]"));
+    const hasTranscript = Boolean(document.querySelector("[role='log'], [data-message-author-role]"))
+      || Boolean(document.querySelector("[data-thread-find-target='conversation'], [data-user-message-bubble='true']"));
     const hasCode = Boolean(document.querySelector("pre code, [data-language-for-alternating-lines]"));
-    const hasProjectSurface = Boolean(document.querySelector("[role='tree'], [aria-label*='Project'], [aria-label*='项目']"));
-    const hasWelcomeSurface = Boolean(document.querySelector("[data-testid*='welcome'], [aria-label*='Welcome'], [aria-label*='欢迎']"));
-    const hasWorkingSurface = hasTranscript || hasCode || hasProjectSurface || (hasComposer && !hasWelcomeSurface);
-
-    return hasMain && hasWelcomeSurface && !hasWorkingSurface ? "ambient" : "focus";
+    // The current Codex welcome screen has neither a stable welcome test id nor
+    // an aria label, but it does contain a composer. Treat transcript/code as the
+    // reliable focus signal; welcome and settings remain ambient glass surfaces.
+    return hasMain && !hasTranscript && !hasCode ? "ambient" : "focus";
   };
 
   const updateMode = (root) => {
@@ -226,8 +225,8 @@
     const surface = safeColor(colors.surface, FALLBACK_COLORS.surface);
     const foreground = safeColor(colors.foreground, FALLBACK_COLORS.foreground);
     const muted = safeColor(colors.muted, FALLBACK_COLORS.muted);
-    // Saved themes from earlier versions can contain high opacity values. Cap them
-    // here as a safety boundary so an update never recreates a full-window veil.
+    // Keep the wallpaper visually open. Region-specific foregrounds and local
+    // glass surfaces carry readability; the full-window veil remains deliberately light.
     const ambientOpacity = Math.min(numberValue(layers.ambientOverlayOpacity, 0.12), 0.14);
     const focusOpacity = Math.min(numberValue(layers.focusOverlayOpacity, 0.18), 0.22);
     const cardOpacity = Math.min(numberValue(layers.cardOpacity, 0.18), 0.22);
@@ -239,45 +238,55 @@
       16,
       Math.max(8, Number.isFinite(value) ? value : fallback)
     ));
-    const safeTextShadow = (value, fallback) => (
-      value === "0 1px 2px rgba(0,0,0,0.4)"
-      || value === "0 1px 3px rgba(0,0,0,0.6)"
-      || value === "0 1px 2px rgba(255,255,255,0.4)"
-      || value === "0 1px 3px rgba(255,255,255,0.6)"
-    ) ? value : fallback;
-    // Sidebar, reading content, and environment text stay directly on the wallpaper.
-    // The saved contrast sample chooses their foreground and subtle shadow on every image apply.
-    const textContrastRegion = (value) => {
-      const region = value && typeof value === "object" ? value : {};
-      const regionForeground = safeColor(region.foreground, foreground);
+    const safeTextShadow = (value, fallback) => {
+      if (typeof value !== "string") return fallback;
+      const match = value.match(
+        /^0 1px (?:2|3)px rgba\((?:0,0,0|255,255,255),(0(?:\.\d+)?|1(?:\.0+)?)\)$/
+      );
+      if (!match) return fallback;
+      const alpha = Number(match[1]);
+      return alpha >= 0.4 && alpha <= 0.6 ? value : fallback;
+    };
+    const textContrastRegion = (value, fallbackValue) => {
+      const fallbackRegion = fallbackValue && typeof fallbackValue === "object" ? fallbackValue : {};
+      const region = value && typeof value === "object" ? value : fallbackRegion;
+      const regionForeground = safeColor(region.foreground, safeColor(fallbackRegion.foreground, foreground));
       const isLightText = colorSchemeFor(regionForeground) === "light";
       return {
         foreground: regionForeground,
-        muted: safeColor(region.muted, muted),
+        muted: safeColor(region.muted, safeColor(fallbackRegion.muted, muted)),
         textShadow: safeTextShadow(
           region.textShadow,
-          isLightText ? "0 1px 3px rgba(0,0,0,0.6)" : "0 1px 3px rgba(255,255,255,0.6)"
+          safeTextShadow(
+            fallbackRegion.textShadow,
+            isLightText ? "0 1px 3px rgba(0,0,0,0.6)" : "0 1px 3px rgba(255,255,255,0.6)"
+          )
         )
       };
     };
-    const composerContrastRegion = (value) => {
-      const region = value && typeof value === "object" ? value : {};
-      const text = textContrastRegion(region);
+    const glassContrastRegion = (value, fallbackValue) => {
+      const fallbackRegion = fallbackValue && typeof fallbackValue === "object" ? fallbackValue : {};
+      const region = value && typeof value === "object" ? value : fallbackRegion;
+      const text = textContrastRegion(region, fallbackRegion);
+      const panelOpacity = safePanelOpacity(
+        region.panelOpacity,
+        safePanelOpacity(fallbackRegion.panelOpacity, Math.max(0.24, cardOpacity))
+      );
       return {
         ...text,
-        panelColor: safeColor(region.panelColor, surface),
-        panelOpacity: safePanelOpacity(region.panelOpacity, Math.max(0.24, cardOpacity)),
-        blurPx: safeBlur(region.blurPx, 12)
+        panelColor: safeColor(region.panelColor, safeColor(fallbackRegion.panelColor, surface)),
+        panelOpacity,
+        hoverOpacity: Math.min(0.52, panelOpacity + 0.08),
+        elevatedOpacity: Math.min(0.56, panelOpacity + 0.12),
+        blurPx: safeBlur(region.blurPx, safeBlur(fallbackRegion.blurPx, 12))
       };
     };
-    const sidebar = textContrastRegion(contrast.sidebar);
-    const content = textContrastRegion(contrast.content);
+    const content = glassContrastRegion(contrast.content);
+    const sidebar = glassContrastRegion(contrast.sidebar, contrast.content);
     // Themes saved before the header region existed are intentionally accepted.
-    // Re-applying any saved wallpaper re-analyses it in Rust; this is only a
-    // compatibility fallback while an old payload is still active.
-    const header = textContrastRegion(contrast.header || contrast.content);
-    const infoPanel = textContrastRegion(contrast.infoPanel);
-    const composer = composerContrastRegion(contrast.composer);
+    const header = glassContrastRegion(contrast.header, contrast.content);
+    const infoPanel = glassContrastRegion(contrast.infoPanel, contrast.content);
+    const composer = glassContrastRegion(contrast.composer, contrast.content);
     const colorScheme = colorSchemeFor(surface);
 
     nodes.style.textContent = `
@@ -294,20 +303,42 @@
   --codeskin-content-foreground: ${content.foreground};
   --codeskin-content-muted: ${content.muted};
   --codeskin-content-text-shadow: ${content.textShadow};
+  --codeskin-content-panel-color: ${content.panelColor};
+  --codeskin-content-panel-opacity: ${content.panelOpacity};
+  --codeskin-content-hover-opacity: ${content.hoverOpacity};
+  --codeskin-content-elevated-opacity: ${content.elevatedOpacity};
+  --codeskin-content-blur: ${content.blurPx}px;
   --codeskin-header-foreground: ${header.foreground};
   --codeskin-header-muted-foreground: ${header.muted};
   --codeskin-header-icon-foreground: ${header.foreground};
   --codeskin-header-text-shadow: ${header.textShadow};
+  --codeskin-header-panel-color: ${header.panelColor};
+  --codeskin-header-panel-opacity: ${header.panelOpacity};
+  --codeskin-header-hover-opacity: ${header.hoverOpacity};
+  --codeskin-header-elevated-opacity: ${header.elevatedOpacity};
+  --codeskin-header-blur: ${header.blurPx}px;
   --codeskin-sidebar-foreground: ${sidebar.foreground};
   --codeskin-sidebar-muted: ${sidebar.muted};
   --codeskin-sidebar-text-shadow: ${sidebar.textShadow};
+  --codeskin-sidebar-panel-color: ${sidebar.panelColor};
+  --codeskin-sidebar-panel-opacity: ${sidebar.panelOpacity};
+  --codeskin-sidebar-hover-opacity: ${sidebar.hoverOpacity};
+  --codeskin-sidebar-elevated-opacity: ${sidebar.elevatedOpacity};
+  --codeskin-sidebar-blur: ${sidebar.blurPx}px;
+  --codeskin-wallpaper-veil: ${background};
   --codeskin-info-foreground: ${infoPanel.foreground};
   --codeskin-info-muted: ${infoPanel.muted};
   --codeskin-info-text-shadow: ${infoPanel.textShadow};
+  --codeskin-info-panel-color: ${infoPanel.panelColor};
+  --codeskin-info-panel-opacity: ${infoPanel.panelOpacity};
+  --codeskin-info-hover-opacity: ${infoPanel.hoverOpacity};
+  --codeskin-info-elevated-opacity: ${infoPanel.elevatedOpacity};
+  --codeskin-info-blur: ${infoPanel.blurPx}px;
   --codeskin-composer-foreground: ${composer.foreground};
   --codeskin-composer-muted: ${composer.muted};
   --codeskin-composer-panel-color: ${composer.panelColor};
   --codeskin-composer-panel-opacity: ${composer.panelOpacity};
+  --codeskin-composer-hover-opacity: ${composer.hoverOpacity};
   --codeskin-composer-blur: ${composer.blurPx}px;
   --codeskin-composer-text-shadow: ${composer.textShadow};
 }
@@ -325,6 +356,14 @@
   background-position: center;
   background-size: cover;
   background-repeat: no-repeat;
+  overflow: hidden;
+}
+#${wallpaperId}[${ownedAttribute}="true"][${layerAttribute}="wallpaper"][${runtimeAttribute}="${runtimeOwner}"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--codeskin-wallpaper-veil);
+  opacity: var(--codeskin-current-overlay-opacity);
 }
 :root[${ownerAttribute}],
 :root[${ownerAttribute}] body {
@@ -346,9 +385,9 @@
 :root[${ownerAttribute}] .main-surface [class*="bg-gradient-to-"][class*="from-token-main-surface-primary"] {
   background-image: none !important;
 }
-/* Text floats directly on the wallpaper. Contrast is regional: no non-composer panel,
-   blur, border, background, or box shadow is introduced by CodeSkin. The header
-   is sampled from the actual full-width top strip rather than the content area. */
+/* The header remains visually open. Local glass starts at the sidebar and
+   elevated controls, while the transcript/code canvas stays transparent. Each
+   surface uses the wallpaper sample for the region it occupies. */
 :root[${ownerAttribute}] .app-header-tint {
   color: var(--codeskin-header-foreground) !important;
   background: transparent !important;
@@ -364,6 +403,35 @@ button.no-drag[aria-haspopup="menu"] {
   color: var(--codeskin-header-foreground) !important;
   text-shadow: var(--codeskin-header-text-shadow) !important;
 }
+/* The current task title is nested in a token-colour wrapper inside this stable
+   header context surface. Cover only that real header control and its title leaf. */
+:root[${ownerAttribute}] [data-testid="app-shell-header-context-menu-surface"] :is([class~="text-token-foreground"], [class~="text-token-foreground"] *) {
+  color: var(--codeskin-header-foreground) !important;
+  text-shadow: var(--codeskin-header-text-shadow) !important;
+}
+/* The paired "open location" control is a real header-local fog surface. Use
+   the uploaded wallpaper's sampled header glass instead of Codex's opaque fog
+   token. Match both halves by their structural utility tokens, never localized text. */
+@layer base {
+:root[${ownerAttribute}] [data-testid="app-shell-header-context-menu-surface"] div[class~="inline-flex"][class~="items-stretch"][class~="overflow-hidden"][class~="rounded-lg"] button[class~="border-token-border"][class~="text-token-button-tertiary-foreground"][class~="bg-token-bg-fog"]:is([class~="rounded-r-none"], [class~="rounded-l-none"]) {
+  color: var(--codeskin-header-foreground) !important;
+  background-color: color-mix(in srgb, var(--codeskin-header-panel-color) calc(var(--codeskin-header-panel-opacity) * 100%), transparent) !important;
+  border-color: color-mix(in srgb, var(--codeskin-header-foreground) 22%, transparent) !important;
+  backdrop-filter: blur(var(--codeskin-header-blur)) saturate(112%);
+  -webkit-backdrop-filter: blur(var(--codeskin-header-blur)) saturate(112%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--codeskin-header-foreground) 7%, transparent) !important;
+  text-shadow: var(--codeskin-header-text-shadow) !important;
+}
+:root[${ownerAttribute}] [data-testid="app-shell-header-context-menu-surface"] div[class~="inline-flex"][class~="items-stretch"][class~="overflow-hidden"][class~="rounded-lg"] button[class~="border-token-border"][class~="text-token-button-tertiary-foreground"][class~="bg-token-bg-fog"]:is([class~="rounded-r-none"], [class~="rounded-l-none"]):is(:hover, :focus-visible, [data-state="open"]) {
+  color: var(--codeskin-header-foreground) !important;
+  background-color: color-mix(in srgb, var(--codeskin-header-panel-color) calc(var(--codeskin-header-hover-opacity) * 100%), transparent) !important;
+  border-color: color-mix(in srgb, var(--codeskin-header-foreground) 32%, transparent) !important;
+}
+:root[${ownerAttribute}] [data-testid="app-shell-header-context-menu-surface"] div[class~="inline-flex"][class~="items-stretch"][class~="overflow-hidden"][class~="rounded-lg"] button[class~="border-token-border"][class~="text-token-button-tertiary-foreground"][class~="bg-token-bg-fog"]:is([class~="rounded-r-none"], [class~="rounded-l-none"]) svg[class~="opacity-50"] {
+  color: var(--codeskin-header-foreground) !important;
+  opacity: 0.82 !important;
+}
+}
 /* Header-local navigation and renderer controls inherit the header palette too.
    SVG icons in Codex use currentColor, so no blanket fill override is needed. */
 :root[${ownerAttribute}] .app-header-tint :is(
@@ -372,9 +440,28 @@ button.no-drag[aria-haspopup="menu"] {
   color: var(--codeskin-header-icon-foreground) !important;
   text-shadow: var(--codeskin-header-text-shadow) !important;
 }
+
+/* The responsive sidebar visibility toggle keeps the foreground/5 token even
+   while pressed, which resolves to Codex dark ink over the opened dark glass.
+   Match its stable state and complete class tokens without locale-specific aria text. */
+:root[${ownerAttribute}] .app-header-tint button[aria-pressed][class~="aspect-square"][class~="text-token-foreground"][class~="bg-token-foreground/5"] {
+  color: var(--codeskin-header-icon-foreground) !important;
+  background-color: color-mix(in srgb, var(--codeskin-header-foreground) 13%, transparent) !important;
+  border-color: color-mix(in srgb, var(--codeskin-header-foreground) 20%, transparent) !important;
+  text-shadow: var(--codeskin-header-text-shadow) !important;
+}
+:root[${ownerAttribute}] .app-header-tint button[aria-pressed][class~="aspect-square"][class~="text-token-foreground"][class~="bg-token-foreground/5"]:is(:hover, :focus-visible, [aria-pressed="true"]) {
+  color: var(--codeskin-header-icon-foreground) !important;
+  background-color: color-mix(in srgb, var(--codeskin-header-foreground) 20%, transparent) !important;
+  border-color: color-mix(in srgb, var(--codeskin-header-foreground) 30%, transparent) !important;
+}
 :root[${ownerAttribute}] .app-shell-left-panel {
   color: var(--codeskin-sidebar-foreground) !important;
-  background: transparent !important;
+  background-color: color-mix(in srgb, var(--codeskin-sidebar-panel-color) calc(var(--codeskin-sidebar-panel-opacity) * 100%), transparent) !important;
+  border-right-color: color-mix(in srgb, var(--codeskin-sidebar-foreground) 18%, transparent) !important;
+  backdrop-filter: blur(var(--codeskin-sidebar-blur)) saturate(112%);
+  -webkit-backdrop-filter: blur(var(--codeskin-sidebar-blur)) saturate(112%);
+  box-shadow: 12px 0 34px color-mix(in srgb, var(--codeskin-sidebar-panel-color) 24%, transparent) !important;
 }
 :root[${ownerAttribute}] .app-shell-left-panel :is(
   [class*="text-token-text-primary"], [class*="text-token-text-secondary"], [class*="text-token-text-tertiary"],
@@ -382,6 +469,12 @@ button.no-drag[aria-haspopup="menu"] {
 ) {
   color: var(--codeskin-sidebar-foreground) !important;
   text-shadow: var(--codeskin-sidebar-text-shadow) !important;
+}
+:root[${ownerAttribute}] .app-shell-left-panel :is(
+  [class*="text-token-text-secondary"], [class*="text-token-text-tertiary"],
+  [class*="text-token-description-foreground"]
+) {
+  color: var(--codeskin-sidebar-muted) !important;
 }
 :root[${ownerAttribute}] .main-surface :is(
   [class*="_markdownContent_"], [class*="_codeBlock_"], [class*="bg-token-text-code-block-background"],
@@ -412,55 +505,259 @@ button.no-drag[aria-haspopup="menu"] {
   background: transparent !important;
   text-shadow: var(--codeskin-content-text-shadow) !important;
 }
-:root[${ownerAttribute}] [class*="bg-token-foreground/5"],
-:root[${ownerAttribute}] [class*="bg-token-foreground/5"] :is(
-  [class*="text-token-text"], h1, h2, h3, p, span, label
+/* Activity summaries use Tailwind's base layer because current Codex applies
+   important utilities from its utilities layer. Important cascade-layer priority is
+   reversed, so an unlayered override cannot win regardless of selector specificity.
+   The semantic token class covers both text and currentColor SVG icons without
+   recolouring unrelated transcript icons. */
+@layer base {
+  :root[${ownerAttribute}] body #root .main-surface [class~="group/activity-header"] [class*="text-token-conversation-summary"] {
+    color: var(--codeskin-content-muted) !important;
+    text-shadow: var(--codeskin-content-text-shadow) !important;
+  }
+  :root[${ownerAttribute}] body #root .main-surface [class~="group/activity-header"] :is([class*="text-token-conversation-body"], [class*="text-token-conversation-body"] :is(span, p, label, svg)) {
+    color: var(--codeskin-content-muted) !important;
+    text-shadow: var(--codeskin-content-text-shadow) !important;
+  }
+  /* Current Codex renders the collapsed processed-time summary inside this
+     nested token span; keep the selector on the real expandable status button. */
+  :root[${ownerAttribute}] body #root .main-surface button[aria-expanded] [class~="text-token-conversation-body"] {
+    color: var(--codeskin-content-muted) !important;
+    text-shadow: var(--codeskin-content-text-shadow) !important;
+  }
+}
+/* Welcome and settings use the same stable base glass. Current Codex exposes
+   suggestion cards through group/home-suggestions and the home utility bar; the
+   token-surface fallback also covers settings cards without touching focus chat. */
+:root[${ownerAttribute}][${modeAttribute}="ambient"] .main-surface {
+  color: var(--codeskin-content-foreground) !important;
+}
+:root[${ownerAttribute}][${modeAttribute}="ambient"] .main-surface :is(
+  h1, h2, h3, h4, p, span, label, a,
+  [class*="text-token-text"], [class*="text-token-foreground"]
 ) {
-  color: var(--codeskin-info-foreground) !important;
-  background: transparent !important;
-  text-shadow: var(--codeskin-info-text-shadow) !important;
-}
-/* The floating environment summary is mounted outside .main-surface. Its own
-   token classes otherwise win over inherited wallpaper-aware text colors. Keep
-   the native card surface untouched; only its foreground follows the info sample. */
-:root[${ownerAttribute}] [class*="bg-token-dropdown-background"]:has([class~="group/summary-panel-item"]) {
-  color: var(--codeskin-info-foreground) !important;
-  text-shadow: var(--codeskin-info-text-shadow) !important;
-}
-:root[${ownerAttribute}] [class*="bg-token-dropdown-background"]:has([class~="group/summary-panel-item"]) :is(
-  [class*="text-token-text"], [class*="text-token-foreground"], [class*="text-token-description-foreground"],
-  button, span, p, label, a, svg
-) {
-  color: var(--codeskin-info-foreground) !important;
-  text-shadow: var(--codeskin-info-text-shadow) !important;
-}
-/* Renderer popup menu contents keep their own main-content palette. The header-only
-   rule above targets the visible title/application-menu triggers, not portal content. */
-:root[${ownerAttribute}] [role="menu"] {
   color: var(--codeskin-content-foreground) !important;
   text-shadow: var(--codeskin-content-text-shadow) !important;
 }
-:root[${ownerAttribute}] [role="menu"] :is(
-  [role^="menuitem"], [class*="text-token-text"], [class*="text-token-foreground"],
-  [class*="text-token-description-foreground"], span, p, label, kbd, svg
+:root[${ownerAttribute}][${modeAttribute}="ambient"] .main-surface :is(
+  [class*="text-token-text-secondary"], [class*="text-token-text-tertiary"],
+  [class*="text-token-description-foreground"]
+) {
+  color: var(--codeskin-content-muted) !important;
+}
+:root[${ownerAttribute}][${modeAttribute}="ambient"] .main-surface [class~="group/home-suggestions"] button[class*="bg-token-main-surface-primary"] {
+  color: var(--codeskin-content-foreground) !important;
+  background-color: color-mix(in srgb, var(--codeskin-content-panel-color) calc(var(--codeskin-content-panel-opacity) * 100%), transparent) !important;
+  border-color: color-mix(in srgb, var(--codeskin-content-foreground) 24%, transparent) !important;
+  backdrop-filter: blur(var(--codeskin-content-blur)) saturate(112%);
+  -webkit-backdrop-filter: blur(var(--codeskin-content-blur)) saturate(112%);
+  box-shadow: 0 12px 32px color-mix(in srgb, black 28%, transparent) !important;
+  transition: transform 160ms ease, background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+:root[${ownerAttribute}][${modeAttribute}="ambient"] .main-surface [class~="group/home-suggestions"] button[class*="bg-token-main-surface-primary"]:hover {
+  transform: translateY(-1px);
+  background-color: color-mix(in srgb, var(--codeskin-content-panel-color) calc(var(--codeskin-content-hover-opacity) * 100%), transparent) !important;
+  border-color: color-mix(in srgb, var(--codeskin-secondary) 54%, var(--codeskin-content-foreground)) !important;
+}
+:root[${ownerAttribute}][${modeAttribute}="ambient"] .main-surface [class*="_homeUtilityBar_"] {
+  color: var(--codeskin-content-foreground) !important;
+  background-color: color-mix(in srgb, var(--codeskin-content-panel-color) calc(var(--codeskin-content-panel-opacity) * 100%), transparent) !important;
+  border-color: color-mix(in srgb, var(--codeskin-content-foreground) 22%, transparent) !important;
+  backdrop-filter: blur(var(--codeskin-content-blur)) saturate(112%);
+  -webkit-backdrop-filter: blur(var(--codeskin-content-blur)) saturate(112%);
+}
+:root[${ownerAttribute}][${modeAttribute}="ambient"] .main-surface :is([class*="bg-token-main-surface-primary"], [class*="bg-token-main-surface-secondary"], [class*="bg-token-dropdown-background"]) {
+  color: var(--codeskin-content-foreground) !important;
+  background-color: color-mix(in srgb, var(--codeskin-content-panel-color) calc(var(--codeskin-content-panel-opacity) * 100%), transparent) !important;
+  border-color: color-mix(in srgb, var(--codeskin-content-foreground) 22%, transparent) !important;
+  backdrop-filter: blur(var(--codeskin-content-blur)) saturate(112%);
+  -webkit-backdrop-filter: blur(var(--codeskin-content-blur)) saturate(112%);
+  box-shadow: 0 12px 32px color-mix(in srgb, black 26%, transparent) !important;
+}
+/* Current settings sections do not expose token background classes. Their stable
+   shape is an overflow-hidden rounded card with the token border. Keep this
+   ambient-only so rounded transcript and code containers remain untouched. */
+:root[${ownerAttribute}][${modeAttribute}="ambient"] .main-surface [class~="overflow-hidden"][class~="rounded-2xl"][class~="border-token-border"] {
+  color: var(--codeskin-content-foreground) !important;
+  background-color: color-mix(in srgb, var(--codeskin-content-panel-color) calc(var(--codeskin-content-panel-opacity) * 100%), transparent) !important;
+  border-color: color-mix(in srgb, var(--codeskin-content-foreground) 22%, transparent) !important;
+  backdrop-filter: blur(var(--codeskin-content-blur)) saturate(112%);
+  -webkit-backdrop-filter: blur(var(--codeskin-content-blur)) saturate(112%);
+  box-shadow: 0 12px 32px color-mix(in srgb, black 26%, transparent) !important;
+}
+:root[${ownerAttribute}][${modeAttribute}="ambient"] .main-surface [class~="overflow-hidden"][class~="rounded-2xl"][class~="border-token-border"] > *::after {
+  background-color: color-mix(in srgb, var(--codeskin-content-foreground) 14%, transparent) !important;
+}
+/* Settings controls use bg-token-bg-fog, which otherwise stays nearly opaque
+   white. Match the complete class token so hover:* utility fragments elsewhere
+   cannot be mistaken for a surface. */
+:root[${ownerAttribute}][${modeAttribute}="ambient"] .main-surface [class~="bg-token-bg-fog"] {
+  color: var(--codeskin-content-foreground) !important;
+  background-color: color-mix(in srgb, var(--codeskin-content-panel-color) calc(var(--codeskin-content-panel-opacity) * 100%), transparent) !important;
+  border-color: color-mix(in srgb, var(--codeskin-content-foreground) 20%, transparent) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--codeskin-content-foreground) 8%, transparent) !important;
+}
+:root[${ownerAttribute}][${modeAttribute}="ambient"] .main-surface [class~="bg-token-bg-fog"]:is(:hover, :focus-visible, [data-state="open"]) {
+  color: var(--codeskin-content-foreground) !important;
+  background-color: color-mix(in srgb, var(--codeskin-content-panel-color) calc(var(--codeskin-content-hover-opacity) * 100%), transparent) !important;
+  border-color: color-mix(in srgb, var(--codeskin-content-foreground) 30%, transparent) !important;
+}
+/* The responsive utility sidebar can remain mounted over an existing transcript,
+   so page mode may stay focus even though this real aside is visible. Target its
+   semantic aside and exact surface tokens directly instead of relying on ambient
+   mode or broad main-surface recolouring. */
+:root[${ownerAttribute}] .main-surface aside[class~="z-[41]"] [class~="bg-token-main-surface-primary"] {
+  color: var(--codeskin-content-foreground) !important;
+  background-color: color-mix(in srgb, var(--codeskin-content-panel-color) calc(var(--codeskin-content-panel-opacity) * 100%), transparent) !important;
+  border-color: color-mix(in srgb, var(--codeskin-content-foreground) 22%, transparent) !important;
+  backdrop-filter: blur(var(--codeskin-content-blur)) saturate(112%);
+  -webkit-backdrop-filter: blur(var(--codeskin-content-blur)) saturate(112%);
+  text-shadow: var(--codeskin-content-text-shadow) !important;
+}
+:root[${ownerAttribute}] .main-surface aside[class~="z-[41]"] [class~="bg-token-main-surface-primary"] :is(
+  [class*="text-token-text-primary"], [class*="text-token-foreground"]
 ) {
   color: var(--codeskin-content-foreground) !important;
   text-shadow: var(--codeskin-content-text-shadow) !important;
 }
-/* The pre-existing bottom composer remains the only CodeSkin glass surface. */
+:root[${ownerAttribute}] .main-surface aside[class~="z-[41]"] [class~="bg-token-main-surface-primary"] :is(
+  [class*="text-token-text-secondary"], [class*="text-token-text-tertiary"],
+  [class*="text-token-description-foreground"]
+) {
+  color: var(--codeskin-content-muted) !important;
+  text-shadow: var(--codeskin-content-text-shadow) !important;
+}
+:root[${ownerAttribute}] .main-surface aside[class~="z-[41]"] [class~="bg-token-bg-fog"] {
+  color: var(--codeskin-content-foreground) !important;
+  background-color: color-mix(in srgb, var(--codeskin-content-panel-color) calc(var(--codeskin-content-panel-opacity) * 100%), transparent) !important;
+  border-color: color-mix(in srgb, var(--codeskin-content-foreground) 20%, transparent) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--codeskin-content-foreground) 8%, transparent) !important;
+  text-shadow: var(--codeskin-content-text-shadow) !important;
+}
+:root[${ownerAttribute}] .main-surface aside[class~="z-[41]"] [class~="bg-token-bg-fog"]:is(:hover, :focus-visible, [data-state="open"]) {
+  color: var(--codeskin-content-foreground) !important;
+  background-color: color-mix(in srgb, var(--codeskin-content-panel-color) calc(var(--codeskin-content-hover-opacity) * 100%), transparent) !important;
+  border-color: color-mix(in srgb, var(--codeskin-content-foreground) 30%, transparent) !important;
+}
+/* User messages expose a stable semantic marker. Do not select the Tailwind
+   bg-token-foreground/5 fragment: it also appears inside hover utility class
+   strings on unrelated header buttons and would recolour them accidentally. */
+:root[${ownerAttribute}] [data-user-message-bubble="true"] {
+  color: var(--codeskin-content-foreground) !important;
+  background-color: color-mix(in srgb, var(--codeskin-content-panel-color) calc(var(--codeskin-content-panel-opacity) * 100%), transparent) !important;
+  backdrop-filter: blur(var(--codeskin-content-blur)) saturate(112%);
+  -webkit-backdrop-filter: blur(var(--codeskin-content-blur)) saturate(112%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--codeskin-content-foreground) 18%, transparent), 0 10px 28px color-mix(in srgb, black 24%, transparent) !important;
+}
+:root[${ownerAttribute}] [data-user-message-bubble="true"] :is(
+  [class*="text-token-text"], [class*="_markdownContent_"], h1, h2, h3, h4, p, span, li, label, a, code
+) {
+  color: var(--codeskin-content-foreground) !important;
+  text-shadow: var(--codeskin-content-text-shadow) !important;
+}
+/* Project and application menus are normally opened over the left/header area,
+   so their portal glass follows the sidebar sample. It remains translucent and
+   wallpaper-aware rather than switching to a fixed dark popup. */
+:root[${ownerAttribute}] :is([role="menu"], [data-radix-menu-content]) {
+  color: var(--codeskin-sidebar-foreground) !important;
+  background-color: color-mix(in srgb, var(--codeskin-sidebar-panel-color) calc(var(--codeskin-sidebar-elevated-opacity) * 100%), transparent) !important;
+  border-color: color-mix(in srgb, var(--codeskin-sidebar-foreground) 26%, transparent) !important;
+  backdrop-filter: blur(var(--codeskin-sidebar-blur)) saturate(116%);
+  -webkit-backdrop-filter: blur(var(--codeskin-sidebar-blur)) saturate(116%);
+  box-shadow: 0 18px 46px color-mix(in srgb, var(--codeskin-sidebar-panel-color) 34%, transparent) !important;
+}
+:root[${ownerAttribute}] :is([role="menu"], [data-radix-menu-content]) :is(
+  [role^="menuitem"], button, a, h1, h2, h3, h4, p, span, label, kbd, svg,
+  input, textarea, [contenteditable="true"], [class*="text-token-text"], [class*="text-token-foreground"]
+) {
+  color: var(--codeskin-sidebar-foreground) !important;
+  text-shadow: var(--codeskin-sidebar-text-shadow) !important;
+}
+:root[${ownerAttribute}] :is([role="menu"], [data-radix-menu-content]) :is(
+  [class*="text-token-text-secondary"], [class*="text-token-text-tertiary"],
+  [class*="text-token-description-foreground"]
+) {
+  color: var(--codeskin-sidebar-muted) !important;
+}
+:root[${ownerAttribute}] :is([role="dialog"], [role="listbox"], [data-radix-popover-content], [data-radix-select-content], [class*="bg-token-dropdown-background"]) {
+  color: var(--codeskin-info-foreground) !important;
+  background-color: color-mix(in srgb, var(--codeskin-info-panel-color) calc(var(--codeskin-info-elevated-opacity) * 100%), transparent) !important;
+  border-color: color-mix(in srgb, var(--codeskin-info-foreground) 26%, transparent) !important;
+  backdrop-filter: blur(var(--codeskin-info-blur)) saturate(116%);
+  -webkit-backdrop-filter: blur(var(--codeskin-info-blur)) saturate(116%);
+  box-shadow: 0 18px 46px color-mix(in srgb, var(--codeskin-info-panel-color) 34%, transparent) !important;
+}
+:root[${ownerAttribute}] :is(
+  [role="dialog"], [role="listbox"], [data-radix-popover-content],
+  [data-radix-select-content], [class*="bg-token-dropdown-background"]
+) :is(
+  button, a, h1, h2, h3, h4, p, span, label, kbd, svg,
+  input, textarea, [contenteditable="true"], [class*="text-token-text"], [class*="text-token-foreground"]
+) {
+  color: var(--codeskin-info-foreground) !important;
+  text-shadow: var(--codeskin-info-text-shadow) !important;
+}
+:root[${ownerAttribute}] :is(
+  [role="dialog"], [role="listbox"], [data-radix-popover-content],
+  [data-radix-select-content], [class*="bg-token-dropdown-background"]
+) :is(
+  [class*="text-token-text-secondary"], [class*="text-token-text-tertiary"],
+  [class*="text-token-description-foreground"]
+) {
+  color: var(--codeskin-info-muted) !important;
+}
+:root[${ownerAttribute}] :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]):is(:hover, :focus-visible, [data-highlighted]) {
+  color: var(--codeskin-sidebar-foreground) !important;
+  background-color: color-mix(in srgb, var(--codeskin-sidebar-foreground) 13%, transparent) !important;
+}
+/* The composer keeps its own sampled glass in both welcome and task views. */
 :root[${ownerAttribute}] .composer-surface-chrome {
   color: var(--codeskin-composer-foreground) !important;
   background-color: color-mix(in srgb, var(--codeskin-composer-panel-color) calc(var(--codeskin-composer-panel-opacity) * 100%), transparent) !important;
   border-color: color-mix(in srgb, var(--codeskin-composer-muted) 30%, transparent) !important;
-  backdrop-filter: blur(var(--codeskin-composer-blur)) saturate(112%);
-  -webkit-backdrop-filter: blur(var(--codeskin-composer-blur)) saturate(112%);
-  box-shadow: 0 10px 30px color-mix(in srgb, var(--codeskin-composer-panel-color) 20%, transparent) !important;
+  backdrop-filter: blur(var(--codeskin-composer-blur)) saturate(114%);
+  -webkit-backdrop-filter: blur(var(--codeskin-composer-blur)) saturate(114%);
+  box-shadow: 0 14px 38px color-mix(in srgb, var(--codeskin-composer-panel-color) 28%, transparent) !important;
 }
 :root[${ownerAttribute}] .composer-surface-chrome :is(
   [class*="text-token-text"], h1, h2, h3, p, span, label, input, textarea, [contenteditable="true"]
 ) {
   color: var(--codeskin-composer-foreground) !important;
   text-shadow: var(--codeskin-composer-text-shadow) !important;
+}
+:root[${ownerAttribute}] .app-shell-left-panel ::placeholder,
+:root[${ownerAttribute}] :is([role="menu"], [data-radix-menu-content]) ::placeholder {
+  color: var(--codeskin-sidebar-muted) !important;
+  opacity: 1 !important;
+}
+:root[${ownerAttribute}] .composer-surface-chrome ::placeholder {
+  color: var(--codeskin-composer-muted) !important;
+  opacity: 1 !important;
+}
+:root[${ownerAttribute}] :is([role="dialog"], [role="listbox"], [data-radix-popover-content], [data-radix-select-content]) ::placeholder {
+  color: var(--codeskin-info-muted) !important;
+  opacity: 1 !important;
+}
+:root[${ownerAttribute}][${modeAttribute}="ambient"] .main-surface ::placeholder {
+  color: var(--codeskin-content-muted) !important;
+  opacity: 1 !important;
+}
+:root[${ownerAttribute}] .app-shell-left-panel :disabled,
+:root[${ownerAttribute}] :is([role="menu"], [data-radix-menu-content]) :disabled {
+  color: var(--codeskin-sidebar-muted) !important;
+  opacity: 0.82 !important;
+}
+:root[${ownerAttribute}] .composer-surface-chrome :disabled {
+  color: var(--codeskin-composer-muted) !important;
+  opacity: 0.82 !important;
+}
+:root[${ownerAttribute}] :is([role="dialog"], [role="listbox"], [data-radix-popover-content], [data-radix-select-content]) :disabled {
+  color: var(--codeskin-info-muted) !important;
+  opacity: 0.82 !important;
+}
+:root[${ownerAttribute}][${modeAttribute}="ambient"] .main-surface :disabled {
+  color: var(--codeskin-content-muted) !important;
+  opacity: 0.82 !important;
 }
 :root[${ownerAttribute}] :focus-visible {
   outline-color: color-mix(in srgb, var(--codeskin-secondary) 78%, white) !important;
