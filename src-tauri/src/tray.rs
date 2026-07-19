@@ -17,12 +17,26 @@ enum TrayMenuAction {
 
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let menu = build_menu(app)?;
+    let icon = tray_icon(app.default_window_icon())?;
+
     TrayIconBuilder::with_id(TRAY_ID)
+        .icon(icon)
         .menu(&menu)
         .tooltip("CodeSkin — 非官方 Codex 背景工具")
         .on_menu_event(on_menu_event)
         .build(app)?;
     Ok(())
+}
+
+fn tray_icon(
+    icon: Option<&tauri::image::Image<'_>>,
+) -> tauri::Result<tauri::image::Image<'static>> {
+    match icon {
+        Some(icon) => Ok(icon.clone().to_owned()),
+        None => Err(tauri::Error::AssetNotFound(
+            "application icon for tray".into(),
+        )),
+    }
 }
 
 fn build_menu(manager: &impl Manager<tauri::Wry>) -> tauri::Result<Menu<tauri::Wry>> {
@@ -70,8 +84,22 @@ fn menu_action(id: &str) -> Option<TrayMenuAction> {
 
 #[cfg(test)]
 mod tests {
-    use super::{menu_action, TrayMenuAction};
+    use super::{menu_action, tray_icon, TrayMenuAction};
 
+    #[test]
+    fn packaged_icon_is_available_for_the_tray() {
+        let context: tauri::Context<tauri::Wry> = tauri::generate_context!();
+        let icon = tray_icon(
+            context
+                .tray_icon()
+                .or_else(|| context.default_window_icon()),
+        )
+        .expect("the packaged application icon should be available for the tray");
+
+        assert!(icon.width() > 0);
+        assert!(icon.height() > 0);
+        assert!(!icon.rgba().is_empty());
+    }
     #[test]
     fn quit_menu_action_exits_without_restoring_the_active_theme() {
         assert_eq!(menu_action("quit"), Some(TrayMenuAction::Exit));
