@@ -2,7 +2,6 @@
 
 <div align="center">
 
-English version: [README.md](docs/en/README.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) ![Platform](https://img.shields.io/badge/platform-Windows-black)  ![Codex Desktop](https://img.shields.io/badge/Codex-Desktop-10a37f)
 
 </div>
