@@ -1,6 +1,11 @@
 # CodeSkin
 
-English version: [docs/en/README.md](docs/en/README.md)
+<div align="center">
+
+English version: [README.md](docs/en/README.md)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) ![Platform](https://img.shields.io/badge/platform-Windows-black)  ![Codex Desktop](https://img.shields.io/badge/Codex-Desktop-10a37f)
+
+</div>
 
 **为你的 Codex 桌面端，披上一件随呼吸律动的数字化外衣。**
 
