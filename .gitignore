@@ -63,6 +63,9 @@ Thumbs.db
 
 # Local verification and manual build artifacts
 docs/**
+!docs/
+!docs/en/
+!docs/en/*.md
 /CodeSkin-loopback-only.exe
 /src-tauri/artifacts/
 
